@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 
 class metrics():
-    def __init__(self,df: pd.DataFrame,investment_type: str,risk_free_rate: float,returns_column: str = 'return',starting_equity: float = 1000000,high: str = 'high',low:str = 'low',close: str='close'):
+    def __init__(self,df: pd.DataFrame,investment_type: str,risk_free_rate: float,returns_column: str = 'return',starting_equity: float = 1000000,high: str = 'high',low:str = 'low',close: str='close',verbose:bool = True):
         self.df = df
         self.returns = df[returns_column].fillna(0)
         self.close = df[close]
@@ -10,6 +10,7 @@ class metrics():
         self.low = df[low]
         self.investment_type = investment_type
         self.risk_free_rate = risk_free_rate
+        self.verbose = verbose
         if self.investment_type == 'crypto':
             self.annualization = 365
         else:
@@ -28,8 +29,9 @@ class metrics():
         annualized_returns = self.returns.mean() * self.annualization
         annualized_std = self.returns.std()*np.sqrt(self.annualization)
         sharpe = round((annualized_returns - self.risk_free_rate)/annualized_std,6)
-        print('-'*30)
-        print(f'Sharpe: {sharpe}')
+        if self.verbose == True:
+            print('-'*30)
+            print(f'Sharpe: {sharpe}')
         return sharpe
 
 
@@ -51,7 +53,8 @@ class metrics():
             return 0.0
     
         sortino = round((annualized_returns - self.risk_free_rate)/annualized_downside_deviation,6)
-        print(f'Sortino: {sortino}')
+        if self.verbose == True:
+            print(f'Sortino: {sortino}')
         return sortino
 
 
@@ -66,7 +69,8 @@ class metrics():
         if downside_sum == 0:
             return 0.0
         omega = round(upside_sum/downside_sum,6)
-        print(f'Omega: {omega}')
+        if self.verbose == True:
+            print(f'Omega: {omega}')
         return omega
     
     def calmar_ratio(self) -> float:
@@ -101,9 +105,10 @@ class metrics():
         calmar_ratio = cagr / abs(max_dd)
         
         # Ładne drukowanie wyników
-        print(f"Średni roczny zysk (CAGR): {cagr * 100:.2f}%")
-        print(f"Pesymistyczny Max DD:      {max_dd * 100:.2f}%")
-        print(f"Calmar Ratio:              {calmar_ratio:.2f}")
+        if self.verbose == True:
+            print(f"Średni roczny zysk (CAGR): {cagr * 100:.2f}%")
+            print(f"Pesymistyczny Max DD:      {max_dd * 100:.2f}%")
+            print(f"Calmar Ratio:              {calmar_ratio:.2f}")
         
         return calmar_ratio
 
@@ -114,9 +119,10 @@ class metrics():
         total_growth = np.prod(1 + returns_array) - 1
         strategy_return = round(total_growth*100,3)
         alpha = strategy_return - benchmark_growth
-        print(f'Return: {round(strategy_return,3)}%')
-        print(f'Alpha: {round(alpha,3)}%')
-        print('-'*30)
+        if self.verbose == True:
+            print(f'Return: {round(strategy_return,3)}%')
+            print(f'Alpha: {round(alpha,3)}%')
+            print('-'*30)
         return strategy_return
     
 

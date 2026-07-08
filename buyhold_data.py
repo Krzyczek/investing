@@ -1,4 +1,3 @@
-import data_import
 import investment_metrics as im
 import pandas as pd
 
@@ -19,7 +18,7 @@ def buyhold_benchmark(df: pd.DataFrame,starting_equity: float,instrument_type : 
 
 
 
-    metrics = im.metrics(price,instrument_type,risk_free_investment,'return','bh_equity_high','bh_equity_low','bh_equity')
+    metrics = im.metrics(df=price,investment_type = instrument_type,risk_free_rate = risk_free_investment,returns_column = 'return',high='bh_equity_high',low='bh_equity_low',close='bh_equity')
     sharpe = metrics.sharpe_ratio()
     sortino = metrics.sortino_ratio()
     omega = metrics.omega_ratio()
