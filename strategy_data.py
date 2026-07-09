@@ -18,10 +18,11 @@ class instrument_strategy():
         self.deposit = deposit
         self.instrument_type = instrument_type
         self.risk_free_rate = risk_free_rate
+        
 
     def strategy_evaluation(self):
         dataframe = data_import.data_importer(self.instrument)
-        dataframe.import_yfinance_ticker()
+        dataframe.import_csv_file()
         price = dataframe.df
 
         #price['return'] = price['close'].pct_change(fill_method=None)
@@ -97,15 +98,18 @@ class instrument_strategy():
             
             print("\n--- ZAKOŃCZONO OPTYMALIZACJĘ ---")
             best = study.best_trials
-            for i in best:
-                print('Trial')
-                print(i)
-                print('End of trial')
+            lista=[]
+            for trial in best:
+                parametry = trial.params
+                lista.append({'parametry':parametry})
             #print(f"Optymalne parametry: {study.best_params}")
-
+            df_best_trials = pd.DataFrame(lista)
+            self.best_trials = df_best_trials
         return price
         
 
 
 strat_1 = instrument_strategy('BTC-USD', 'crypto', 12000,0.03)
 equity_1 = strat_1.strategy_evaluation()
+row = strat_1.best_trials.loc[0,'parametry']
+print(row)
