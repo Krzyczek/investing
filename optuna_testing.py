@@ -89,7 +89,7 @@ class instrument_strategy():
                 raise optuna.TrialPruned()
             return sortino, calmar, alpha
         
-        if __name__ == "__main__":
+        if __name__ != "__main__":
             # Opcja 'maximize' mówi Optunie, że im większy wynik z return, tym lepiej
             study = optuna.create_study(directions=['maximize','maximize','maximize'])
             
@@ -100,16 +100,16 @@ class instrument_strategy():
             best = study.best_trials
             lista=[]
             for trial in best:
-                parametry = trial.params
-                lista.append({'parametry':parametry})
+                    parametry = trial.params
+                    lista.append({'parametry':parametry})
+            if not lista:
+                lista=[{'parametry':'brak danych'}]
+                
             #print(f"Optymalne parametry: {study.best_params}")
             df_best_trials = pd.DataFrame(lista)
             self.best_trials = df_best_trials
-        return price
+                
+
         
 
 
-strat_1 = instrument_strategy('BTC-USD', 'crypto', 12000,0.03)
-equity_1 = strat_1.strategy_evaluation()
-row = strat_1.best_trials.loc[0,'parametry']
-print(row)
