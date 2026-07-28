@@ -46,36 +46,36 @@ class instrument_strategy():
             #tpi_signal.calculate_oscillator(adx_period,threshold)
             tpi_signal.calculate_tpi(slow_ma_period,fast_ma_period,adx_period,threshold)
             # 1. Sygnał na koniec dzisiejszego dnia
-            price['signal'] = tpi_signal.signal
+            test_df['signal'] = tpi_signal.signal
             
             # 2. PRZESUNIĘCIE SYGNAŁU (Likwidacja wehikułu czasu)
-            shifted_signal = price['signal'].shift(1).fillna(0)
+            shifted_signal = test_df['signal'].shift(1).fillna(0)
             
             # 3. Zyski i Kapitał
-            price['strat_return'] = price['return'] * shifted_signal
-            price['equity'] = self.deposit * (1 + price['strat_return']).cumprod()
+            test_df['strat_return'] = test_df['return'] * shifted_signal
+            test_df['equity'] = self.deposit * (1 + test_df['strat_return']).cumprod()
             
             # 4. Zwroty wewnątrzdzienne (High/Low)
-            price['return_high'] = (price['high'] - price['close'].shift(1)) / price['close'].shift(1)
-            price['return_low'] = (price['low'] - price['close'].shift(1)) / price['close'].shift(1)
+            test_df['return_high'] = (test_df['high'] - test_df['close'].shift(1)) / test_df['close'].shift(1)
+            test_df['return_low'] = (test_df['low'] - test_df['close'].shift(1)) / test_df['close'].shift(1)
             
             # 5. Kapitał High/Low z użyciem prawidłowego (przesuniętego) sygnału
-            prev_equity = price['equity'].shift(1).fillna(self.deposit)
-            price['equity_high'] = np.where(shifted_signal == 1, prev_equity * (1 + price['return_high']).fillna(0), prev_equity)
-            price['equity_low'] = np.where(shifted_signal == 1, prev_equity * (1 + price['return_low']).fillna(0), prev_equity)
+            prev_equity = test_df['equity'].shift(1).fillna(self.deposit)
+            test_df['equity_high'] = np.where(shifted_signal == 1, prev_equity * (1 + test_df['return_high']).fillna(0), prev_equity)
+            test_df['equity_low'] = np.where(shifted_signal == 1, prev_equity * (1 + test_df['return_low']).fillna(0), prev_equity)
             
             # 6. BEZPIECZNE wypełnianie braków (tylko dla kolumn kapitałowych!)
-            price['equity'] = price['equity'].fillna(self.deposit)
-            price['equity_high'] = price['equity_high'].fillna(self.deposit)
-            price['equity_low'] = price['equity_low'].fillna(self.deposit)
-            is_liquidated = np.where(price['equity'] < 0,1,0)
-            print(price['equity'].min())
+            test_df['equity'] = test_df['equity'].fillna(self.deposit)
+            test_df['equity_high'] = test_df['equity_high'].fillna(self.deposit)
+            test_df['equity_low'] = test_df['equity_low'].fillna(self.deposit)
+            is_liquidated = np.where(test_df['equity'] < 0,1,0)
+            print(test_df['equity'].min())
             print(is_liquidated.min())
             rect = True if is_liquidated.min() < 0 else False 
             # sygnał calculation finished
             if rect == True:
                 raise optuna.TrialPruned()
-            strat_metrics = im.metrics(df=price,investment_type = self.instrument_type,risk_free_rate = self.risk_free_rate,returns_column = 'strat_return',starting_equity=self.deposit,high='equity_high',low='equity_low',close='equity',verbose=False)
+            strat_metrics = im.metrics(df=test_df,investment_type = self.instrument_type,risk_free_rate = self.risk_free_rate,returns_column = 'strat_return',starting_equity=self.deposit,high='equity_high',low='equity_low',close='equity',verbose=False)
             sharpe = strat_metrics.sharpe_ratio()
             sortino = strat_metrics.sortino_ratio()
             omega = strat_metrics.omega_ratio()
@@ -95,7 +95,7 @@ class instrument_strategy():
             study = optuna.create_study(directions=['maximize','maximize','maximize'])
             
             print("Rozpoczynam poszukiwanie najlepszych parametrów...")
-            study.optimize(objective, n_trials=5000, n_jobs=-1) # n_jobs=-1 używa wszystkich rdzeni procesora!
+            study.optimize(objective, n_trials=500, n_jobs=-1) # n_jobs=-1 używa wszystkich rdzeni procesora!
             
             print("\n--- ZAKOŃCZONO OPTYMALIZACJĘ ---")
             best = study.best_trials
@@ -136,30 +136,30 @@ class instrument_strategy():
         #tpi_signal.calculate_oscillator(adx_period,threshold)
         tpi_signal.calculate_tpi(self.slow_ma,self.fast_ma,self.adx_period,self.threshold)
         # 1. Sygnał na koniec dzisiejszego dnia
-        price['signal'] = tpi_signal.signal
+        test_df['signal'] = tpi_signal.signal
                     
         # 2. PRZESUNIĘCIE SYGNAŁU (Likwidacja wehikułu czasu)
-        shifted_signal = price['signal'].shift(1).fillna(0)
+        shifted_signal = test_df['signal'].shift(1).fillna(0)
                     
         # 3. Zyski i Kapitał
-        price['strat_return'] = price['return'] * shifted_signal
-        price['equity'] = self.deposit * (1 + price['strat_return']).cumprod()
+        test_df['strat_return'] = test_df['return'] * shifted_signal
+        test_df['equity'] = self.deposit * (1 + test_df['strat_return']).cumprod()
                     
         # 4. Zwroty wewnątrzdzienne (High/Low)
-        price['return_high'] = (price['high'] - price['close'].shift(1)) / price['close'].shift(1)
-        price['return_low'] = (price['low'] - price['close'].shift(1)) / price['close'].shift(1)
+        test_df['return_high'] = (test_df['high'] - test_df['close'].shift(1)) / test_df['close'].shift(1)
+        test_df['return_low'] = (test_df['low'] - test_df['close'].shift(1)) / test_df['close'].shift(1)
                     
         # 5. Kapitał High/Low z użyciem prawidłowego (przesuniętego) sygnału
-        prev_equity = price['equity'].shift(1).fillna(self.deposit)
-        price['equity_high'] = np.where(shifted_signal == 1, prev_equity * (1 + price['return_high']).fillna(0), prev_equity)
-        price['equity_low'] = np.where(shifted_signal == 1, prev_equity * (1 + price['return_low']).fillna(0), prev_equity)
+        prev_equity = test_df['equity'].shift(1).fillna(self.deposit)
+        test_df['equity_high'] = np.where(shifted_signal == 1, prev_equity * (1 + test_df['return_high']).fillna(0), prev_equity)
+        test_df['equity_low'] = np.where(shifted_signal == 1, prev_equity * (1 + test_df['return_low']).fillna(0), prev_equity)
                     
         # 6. BEZPIECZNE wypełnianie braków (tylko dla kolumn kapitałowych!)
-        price['equity'] = price['equity'].fillna(self.deposit)
-        price['equity_high'] = price['equity_high'].fillna(self.deposit)
-        price['equity_low'] = price['equity_low'].fillna(self.deposit)
+        test_df['equity'] = test_df['equity'].fillna(self.deposit)
+        test_df['equity_high'] = test_df['equity_high'].fillna(self.deposit)
+        test_df['equity_low'] = test_df['equity_low'].fillna(self.deposit)
        
-        strat_metrics = im.metrics(df=price,investment_type = self.instrument_type,risk_free_rate = self.risk_free_rate,returns_column = 'strat_return',starting_equity=self.deposit,high='equity_high',low='equity_low',close='equity',verbose=False)
+        strat_metrics = im.metrics(df=test_df,investment_type = self.instrument_type,risk_free_rate = self.risk_free_rate,returns_column = 'strat_return',starting_equity=self.deposit,high='equity_high',low='equity_low',close='equity',verbose=False)
         sharpe = strat_metrics.sharpe_ratio()
         sortino = strat_metrics.sortino_ratio()
         omega = strat_metrics.omega_ratio()
