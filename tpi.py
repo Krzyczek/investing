@@ -25,7 +25,9 @@ class tpi():
         self.oscillator_signal = np.where(adx.adx_values > self.threshold,1,-1)
 
 
-    def calculate_tpi(self):
+    def calculate_tpi(self,slow_ema_length: int, fast_ema_length: int, adx_length: int, threshold: int):
+        self.calculate_perpetual(slow_ema_length,fast_ema_length)
+        self.calculate_oscillator(adx_length,threshold)
         tpi = (self.perpetual_signal + self.oscillator_signal)/2
         self.signal = np.where(tpi > 0, 1, 0)
 
