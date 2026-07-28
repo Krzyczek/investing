@@ -95,7 +95,7 @@ class instrument_strategy():
             study = optuna.create_study(directions=['maximize','maximize','maximize'])
             
             print("Rozpoczynam poszukiwanie najlepszych parametrów...")
-            study.optimize(objective, n_trials=500, n_jobs=-1) # n_jobs=-1 używa wszystkich rdzeni procesora!
+            study.optimize(objective, n_trials=5000, n_jobs=-1) # n_jobs=-1 używa wszystkich rdzeni procesora!
             
             print("\n--- ZAKOŃCZONO OPTYMALIZACJĘ ---")
             best = study.best_trials
