@@ -23,13 +23,17 @@ def eval(deposit : int):
 
     return trials_dataframe
 
-evaluation = eval(12000)
-all_tested_series = []
-for index,item in evaluation.iterrows():
-    test_parameter = item['parametry']
-    tested = istr('tested','stocks',12000).best_of_best_selection(test_parameter['fast_ma'],test_parameter['slow_ma'],test_parameter['adx_period'],test_parameter['threshold'])
-    all_tested_series.append(tested)
-selected = pd.DataFrame(all_tested_series)
 
-print(selected)
+
+def selected_test(evaluation):
+    all_tested_series = []
+    for index,item in evaluation.iterrows():
+        test_parameter = item['parametry']
+        tested = istr('tested','stocks',12000).best_of_best_selection(test_parameter['fast_ma'],test_parameter['slow_ma'],test_parameter['adx_period'],test_parameter['threshold'])
+        all_tested_series.append(tested)
+        all_tested_series.append(test_parameter)
+    selected = pd.DataFrame(all_tested_series)
+    return selected
+
+
     
