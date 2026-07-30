@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 
 class metrics():
-    def __init__(self,df: pd.DataFrame,investment_type: str,risk_free_rate: float,returns_column: str = 'return',starting_equity: float = 1000000,high: str = 'high',low:str = 'low',close: str='close',verbose:bool = True):
+    def __init__(self,df: pd.DataFrame,investment_type: str,risk_free_rate: float,returns_column: str = 'return',starting_equity: float = 1000000,high: str = 'high',low:str = 'low',close: str='close',verbose:bool = False):
         self.df = df
         self.returns = df[returns_column].fillna(0)
         self.close = df[close]

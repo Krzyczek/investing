@@ -84,12 +84,7 @@ class instrument_strategy():
 
            
 
-            if sortino < 1:
-                raise optuna.TrialPruned()
-            if calmar < 0.5:
-                raise optuna.TrialPruned()
-            if alpha < 0:
-                raise optuna.TrialPruned()
+            
             return sortino, calmar, alpha
         
         if __name__ != "__main__":
