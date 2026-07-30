@@ -28,12 +28,22 @@ def eval(deposit : int):
 def selected_test(evaluation):
     all_tested_series = []
     for index,item in evaluation.iterrows():
+        
         test_parameter = item['parametry']
-        tested = istr('tested','stocks',12000).best_of_best_selection(test_parameter['fast_ma'],test_parameter['slow_ma'],test_parameter['adx_period'],test_parameter['threshold'])
-        all_tested_series.append(tested)
-        all_tested_series.append(test_parameter)
-    selected = pd.DataFrame(all_tested_series)
-    return selected
+        try:
+            tested = istr('tested','stocks',12000).best_of_best_selection(test_parameter['fast_ma'],test_parameter['slow_ma'],test_parameter['adx_period'],test_parameter['threshold'])
+        
+            combined_data = { **tested.to_dict(), **test_parameter}
+            all_tested_series.append(combined_data)
+            selected = pd.DataFrame(all_tested_series)
+            print("Successfully tested parameters")
+            return selected
+       
+        except Exception as e:
+            print(f"No values found in test_parameter: {test_parameter}. Error: {e}")
+            return None
+        
+    
 
 
     

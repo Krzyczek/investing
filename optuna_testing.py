@@ -86,7 +86,7 @@ class instrument_strategy():
 
             if sortino < 1:
                 raise optuna.TrialPruned()
-            if calmar < 0.5:
+            if calmar < 0.75:
                 raise optuna.TrialPruned()
             return sortino, calmar, alpha
         
@@ -95,7 +95,7 @@ class instrument_strategy():
             study = optuna.create_study(directions=['maximize','maximize','maximize'])
             
             print("Rozpoczynam poszukiwanie najlepszych parametrów...")
-            study.optimize(objective, n_trials=500, n_jobs=-1) # n_jobs=-1 używa wszystkich rdzeni procesora!
+            study.optimize(objective, n_trials=10000, n_jobs=-1) # n_jobs=-1 używa wszystkich rdzeni procesora!
             
             print("\n--- ZAKOŃCZONO OPTYMALIZACJĘ ---")
             best = study.best_trials
@@ -104,7 +104,7 @@ class instrument_strategy():
                     parametry = trial.params
                     lista.append({'parametry':parametry})
             if not lista:
-                lista=[{'parametry':'brak danych'}]
+                lista=[{'parametry':0}]
                 
             #print(f"Optymalne parametry: {study.best_params}")
             df_best_trials = pd.DataFrame(lista)
