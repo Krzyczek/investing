@@ -61,8 +61,8 @@ class instrument_strategy():
             
             # 5. Kapitał High/Low z użyciem prawidłowego (przesuniętego) sygnału
             prev_equity = test_df['equity'].shift(1).fillna(self.deposit)
-            test_df['equity_high'] = np.where(shifted_signal == 1, prev_equity * (1 + test_df['return_high']).fillna(0), prev_equity)
-            test_df['equity_low'] = np.where(shifted_signal == 1, prev_equity * (1 + test_df['return_low']).fillna(0), prev_equity)
+            test_df['equity_high'] = np.where(shifted_signal == 1, prev_equity * (1 + test_df['return_high'].fillna(0)), prev_equity)
+            test_df['equity_low'] = np.where(shifted_signal == 1, prev_equity * (1 + test_df['return_low'].fillna(0)), prev_equity)
             
             # 6. BEZPIECZNE wypełnianie braków (tylko dla kolumn kapitałowych!)
             test_df['equity'] = test_df['equity'].fillna(self.deposit)
@@ -71,7 +71,7 @@ class instrument_strategy():
             is_liquidated = np.where(test_df['equity'] < 0,1,0)
             print(test_df['equity'].min())
             print(is_liquidated.min())
-            rect = True if is_liquidated.min() < 0 else False 
+            rect = True if is_liquidated.max() == 1 else False 
             # sygnał calculation finished
             if rect == True:
                 raise optuna.TrialPruned()
@@ -86,7 +86,9 @@ class instrument_strategy():
 
             if sortino < 1:
                 raise optuna.TrialPruned()
-            if calmar < 0.75:
+            if calmar < 0.5:
+                raise optuna.TrialPruned()
+            if alpha < 0:
                 raise optuna.TrialPruned()
             return sortino, calmar, alpha
         
@@ -151,8 +153,8 @@ class instrument_strategy():
                     
         # 5. Kapitał High/Low z użyciem prawidłowego (przesuniętego) sygnału
         prev_equity = test_df['equity'].shift(1).fillna(self.deposit)
-        test_df['equity_high'] = np.where(shifted_signal == 1, prev_equity * (1 + test_df['return_high']).fillna(0), prev_equity)
-        test_df['equity_low'] = np.where(shifted_signal == 1, prev_equity * (1 + test_df['return_low']).fillna(0), prev_equity)
+        test_df['equity_high'] = np.where(shifted_signal == 1, prev_equity * (1 + test_df['return_high'].fillna(0)), prev_equity)
+        test_df['equity_low'] = np.where(shifted_signal == 1, prev_equity * (1 + test_df['return_low'].fillna(0)), prev_equity)
                     
         # 6. BEZPIECZNE wypełnianie braków (tylko dla kolumn kapitałowych!)
         test_df['equity'] = test_df['equity'].fillna(self.deposit)

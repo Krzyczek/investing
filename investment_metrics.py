@@ -114,15 +114,19 @@ class metrics():
 
 
 
-    def alpha(self,benchmark_growth: float = 0) -> float:
-        returns_array = np.array(self.returns,dtype=float)
+    def total_return(self) -> float:
+        returns_array = np.array(self.returns, dtype=float)
         total_growth = np.prod(1 + returns_array) - 1
-        strategy_return = round(total_growth*100,3)
-        alpha = strategy_return - benchmark_growth
-        if self.verbose == True:
-            print(f'Return: {round(strategy_return,3)}%')
-            print(f'Alpha: {round(alpha,3)}%')
-            print('-'*30)
+        strategy_return = round(total_growth * 100, 3)
+        if self.verbose:
+            print(f'Return: {strategy_return}%')
         return strategy_return
+
+    def alpha(self, benchmark_growth: float = 0) -> float:
+        alpha = round(self.total_return() - benchmark_growth, 3)
+        if self.verbose:
+            print(f'Alpha: {alpha}%')
+            print('-' * 30)
+        return alpha
     
 
