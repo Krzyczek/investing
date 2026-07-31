@@ -93,7 +93,7 @@ class instrument_strategy():
             study = optuna.create_study(directions=['maximize','maximize','maximize'])
             
             print("Rozpoczynam poszukiwanie najlepszych parametrów...")
-            study.optimize(objective, n_trials=10000, n_jobs=-1) # n_jobs=-1 używa wszystkich rdzeni procesora!
+            study.optimize(objective, n_trials=500, n_jobs=-1) # n_jobs=-1 używa wszystkich rdzeni procesora!
             
             print("\n--- ZAKOŃCZONO OPTYMALIZACJĘ ---")
             best = study.best_trials
@@ -120,7 +120,7 @@ class instrument_strategy():
         self.threshold = threshold
         
         
-        benchmark_metrics = buyhold_data.buyhold_benchmark(price, self.deposit, self.instrument_type, self.risk_free_rate)
+        benchmark_metrics = buyhold_data.buyhold_benchmark(price.loc['2018-01-01':], self.deposit, self.instrument_type, self.risk_free_rate)
         self.benchmark_metrics = benchmark_metrics
         self.benchmark_returns = benchmark_metrics['return']
                 
