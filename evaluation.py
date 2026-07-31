@@ -36,13 +36,12 @@ def selected_test(evaluation):
             combined_data = { **tested.to_dict(), **test_parameter}
             all_tested_series.append(combined_data)
             
-            print("Successfully tested parameters")
             
        
         except Exception as e:
             print(f"No values found in test_parameter: {test_parameter}. Error: {e}")
             continue
-        
+    print("Successfully completed all tests. Returning the selected DataFrame.")    
     selected = pd.DataFrame(all_tested_series)
     return selected
 

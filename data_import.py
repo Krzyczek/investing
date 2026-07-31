@@ -18,19 +18,19 @@ class data_importer():
         df['return'] = df['close'].pct_change(fill_method=None)
         self.df = df
 
-    def import_csv_file(self):
+    def import_csv_file(self, start: str = None, end: str = None):
         folder_path = "dane_cenowe"
         for i in os.listdir(folder_path):
-            try: 
-                if i.endswith('.csv'):
-                    full_path = os.path.join(folder_path, i)        
-                    df = pd.read_csv(full_path,parse_dates=True,index_col='time')
-                    df['return'] = df['close'].pct_change(fill_method=None)
-                    self.df = df
-
-            except:
-                print("No csv files found")
-                self.df = pd.DataFrame()
+            if i.endswith('.csv'):
+                full_path = os.path.join(folder_path, i)
+                df = pd.read_csv(full_path, parse_dates=True, index_col='time')
+                df = df.sort_index()
+                if start is not None:
+                    df = df.loc[start:]
+                if end is not None:
+                    df = df.loc[:end]
+                df['return'] = df['close'].pct_change(fill_method=None)
+                self.df = df
             
     
 

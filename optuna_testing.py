@@ -47,6 +47,7 @@ class instrument_strategy():
             tpi_signal.calculate_tpi(slow_ma_period,fast_ma_period,adx_period,threshold)
             # 1. Sygnał na koniec dzisiejszego dnia
             test_df['signal'] = tpi_signal.signal
+            test_df = test_df.loc[test_df.index >= '2018-01-01']
             
             # 2. PRZESUNIĘCIE SYGNAŁU (Likwidacja wehikułu czasu)
             shifted_signal = test_df['signal'].shift(1).fillna(0)
@@ -134,6 +135,7 @@ class instrument_strategy():
         tpi_signal.calculate_tpi(self.slow_ma,self.fast_ma,self.adx_period,self.threshold)
         # 1. Sygnał na koniec dzisiejszego dnia
         test_df['signal'] = tpi_signal.signal
+        test_df = test_df.loc[test_df.index >= '2018-01-01']
                     
         # 2. PRZESUNIĘCIE SYGNAŁU (Likwidacja wehikułu czasu)
         shifted_signal = test_df['signal'].shift(1).fillna(0)
