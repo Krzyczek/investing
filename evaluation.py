@@ -18,13 +18,13 @@ def eval(deposit : int,instrument,safe_investment:float = 0.03):
 
 
 
-def selected_test(evaluation,instrument):
+def selected_test(evaluation,instrument,safe_investment:float = 0.03):
     all_tested_series = []
     for index,item in evaluation.iterrows():
         
         test_parameter = item['parametry']
         try:
-            tested = istr('tested',instrument,12000).best_of_best_selection(test_parameter['fast_ma'],test_parameter['slow_ma'],test_parameter['adx_period'],test_parameter['threshold'])
+            tested = istr('tested',instrument,12000,safe_investment).best_of_best_selection(test_parameter['fast_ma'],test_parameter['slow_ma'],test_parameter['adx_period'],test_parameter['threshold'])
         
             combined_data = { **tested.to_dict(), **test_parameter}
             all_tested_series.append(combined_data)

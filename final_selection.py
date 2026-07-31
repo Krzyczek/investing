@@ -14,7 +14,7 @@ def selection():
     safe_investment = float(input("What is your yearly return for safe investment (e.g. bonds/savings):"))
         
     eval = evaluation.eval(12000, instrument, safe_investment)
-    selection = evaluation.selected_test(eval, instrument)
+    selection = evaluation.selected_test(eval, instrument,safe_investment)
     if selection is None or selection.empty:
         print("No valid data found in the selection.")
         return None

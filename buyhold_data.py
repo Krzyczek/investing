@@ -27,7 +27,7 @@ def buyhold_benchmark(df: pd.DataFrame,starting_equity: float,instrument_type : 
     b_alpha = metrics.alpha()
    
 
-    benchmark_dict = {'sharpe': sharpe.astype(float),
+    benchmark_dict = {'sharpe': sharpe,
                       'sortino': sortino,
                       'omega': omega,
                       'calmar': calmar,

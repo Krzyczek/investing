@@ -27,7 +27,7 @@ class instrument_strategy():
 
         #price['return'] = price['close'].pct_change(fill_method=None)
 
-        benchmark_metrics = buyhold_data.buyhold_benchmark(price, self.deposit, self.instrument_type, self.risk_free_rate)
+        benchmark_metrics = buyhold_data.buyhold_benchmark(price.loc['2018-01-01':], self.deposit, self.instrument_type, self.risk_free_rate)
         self.benchmark_metrics = benchmark_metrics
         self.benchmark_returns = benchmark_metrics['return']
         
@@ -69,12 +69,10 @@ class instrument_strategy():
             test_df['equity'] = test_df['equity'].fillna(self.deposit)
             test_df['equity_high'] = test_df['equity_high'].fillna(self.deposit)
             test_df['equity_low'] = test_df['equity_low'].fillna(self.deposit)
-            is_liquidated = np.where(test_df['equity'] < 0,1,0)
-            print(test_df['equity'].min())
-            print(is_liquidated.min())
-            rect = True if is_liquidated.max() == 1 else False 
-            # sygnał calculation finished
-            if rect == True:
+            running_peak = test_df['equity'].cummax()
+            max_drawdown = ((test_df['equity'] - running_peak) / running_peak).min()
+
+            if max_drawdown < -0.60:   # reject strategies that lost >60% from peak
                 raise optuna.TrialPruned()
             strat_metrics = im.metrics(df=test_df,investment_type = self.instrument_type,risk_free_rate = self.risk_free_rate,returns_column = 'strat_return',starting_equity=self.deposit,high='equity_high',low='equity_low',close='equity',verbose=False)
             sharpe = strat_metrics.sharpe_ratio()
