@@ -83,7 +83,7 @@ class instrument_strategy():
             test_df['equity_high'] = test_df['equity_high'].fillna(self.deposit)
             test_df['equity_low'] = test_df['equity_low'].fillna(self.deposit)
             
-            if (1 + test_df['equity'] <= 0).any():
+            if (1 + test_df['strat_return'] <= 0).any():
                 raise optuna.TrialPruned()   # strategy was liquidated on a short
             running_peak = test_df['equity'].cummax()
             max_drawdown = ((test_df['equity'] - running_peak) / running_peak).min()
@@ -122,7 +122,7 @@ class instrument_strategy():
             df_best_trials = pd.DataFrame(lista)
             self.best_trials = df_best_trials
 
-    def best_of_best_selection(self,fast_ma,slow_ma,adx_period,threshold):
+    def best_of_best_selection(self,fast_ma,slow_ma,adx_period,threshold,mode):
         dataframe = data_import.data_importer(self.instrument)
         dataframe.import_csv_file()
         price = dataframe.df
@@ -132,6 +132,7 @@ class instrument_strategy():
         self.slow_ma=slow_ma
         self.adx_period = adx_period
         self.threshold = threshold
+        self.mode = mode
         
         
         benchmark_metrics = buyhold_data.buyhold_benchmark(price.loc['2018-01-01':], self.deposit, self.instrument_type, self.risk_free_rate)
@@ -146,7 +147,7 @@ class instrument_strategy():
         tpi_signal = tpi.tpi(test_df)
         #tpi_signal.calculate_perpetual(slow_ma_period,fast_ma_period)
         #tpi_signal.calculate_oscillator(adx_period,threshold)
-        tpi_signal.calculate_tpi(self.slow_ma,self.fast_ma,self.adx_period,self.threshold)
+        tpi_signal.calculate_tpi(self.slow_ma,self.fast_ma,self.adx_period,self.threshold,self.mode)
         # 1. Sygnał na koniec dzisiejszego dnia
         test_df['signal'] = tpi_signal.signal
         test_df = test_df.loc[test_df.index >= '2018-01-01']

@@ -15,6 +15,7 @@ class metrics():
             self.annualization = 365
         else:
             self.annualization = 252
+        self.starting_equity = starting_equity
     def sharpe_ratio(self) -> float:
         '''
         returns is a pandas Series containing returns in a decimal format
@@ -34,6 +35,8 @@ class metrics():
             print(f'Sharpe: {sharpe}')
         return sharpe
 
+    
+
 
     def sortino_ratio(self) -> float:
         '''
@@ -52,14 +55,17 @@ class metrics():
         if annualized_downside_deviation == 0:
             return 0.0
     
-        sortino = round((annualized_returns - self.risk_free_rate)/annualized_downside_deviation,6)
-        if self.verbose == True:
-            print(f'Sortino: {sortino}')
-        return sortino
+        if annualized_downside_deviation == 0:
+                if self.returns.abs().sum() == 0:
+                    return np.nan                      # no activity at all
+                excess = annualized_returns - self.risk_free_rate
+                return np.inf if excess > 0 else np.nan  # perfect strategy → best score
+        
+        return round((annualized_returns - self.risk_free_rate) / annualized_downside_deviation, 6)
 
 
     def omega_ratio(self) -> float:
-        returns_array= np.array(self.returns)
+        returns_array= np.asarray(self.returns,dtype=float)
     
 
         daily_mar = self.risk_free_rate/self.annualization
@@ -67,7 +73,7 @@ class metrics():
         upside_sum = np.sum(excess_returns[excess_returns > 0])
         downside_sum = np.abs(np.sum(excess_returns[excess_returns <= 0]))
         if downside_sum == 0:
-            return 0.0
+            return np.inf if upside_sum > 0 else np.nan
         omega = round(upside_sum/downside_sum,6)
         if self.verbose == True:
             print(f'Omega: {omega}')
@@ -78,11 +84,13 @@ class metrics():
         Oblicza Calmar Ratio uwzględniając wewnątrzdzienne ekstrema (High i Low).
         Zakłada, że DataFrame posiada kolumny 'close', 'high' oraz 'low'.
         """
-        
+        if self.close.iloc[-1] <= 0:
+            return np.nan
         # --- 1. ROCZNA STOPA ZWROTU (CAGR) ---
         # Liczymy na podstawie cen zamknięcia (Close)
+        
         total_years = len(self.df) / self.annualization
-        total_return = self.close.iloc[-1] / self.close.iloc[0]
+        total_return = self.close.iloc[-1] / self.starting_equity
         # Wzór na CAGR: (Kapitał_Końcowy / Kapitał_Początkowy) ^ (1 / Lata) - 1
         cagr = (total_return ** (1 / total_years)) - 1
         
