@@ -181,6 +181,7 @@ class adx():
 
         # krok 4: DX
         dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+        dx = dx.fillna(0)
 
         # krok 5-6: ADX = wygładzone DX, przeskalowane z "sumy" na "średnią"
         self.adx_values = self._wilder_smoothing(dx) / length

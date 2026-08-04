@@ -52,9 +52,7 @@ class metrics():
         daily_downside_deviation = np.sqrt(np.mean(downside_deviation**2))
         annualized_downside_deviation = daily_downside_deviation * np.sqrt(self.annualization)
 
-        if annualized_downside_deviation == 0:
-            return 0.0
-    
+        
         if annualized_downside_deviation == 0:
                 if self.returns.abs().sum() == 0:
                     return np.nan                      # no activity at all
