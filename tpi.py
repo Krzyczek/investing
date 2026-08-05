@@ -30,7 +30,7 @@ class tpi():
         self.calculate_oscillator(adx_length,threshold) 
         tpi = (self.perpetual_signal + self.oscillator_signal)/2
         if mode == 'long_short':
-            self.signal = np.where(tpi > 0, 1, np.where(tpi < 0, -1,0))
+            self.signal = np.where(tpi >= 0, 1, np.where(tpi < 0, -1,0))
         else:
             self.signal = np.where(tpi > 0, 1, 0)
 

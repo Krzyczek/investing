@@ -108,7 +108,7 @@ class instrument_strategy():
             
             print("Rozpoczynam poszukiwanie najlepszych parametrów...")
             study.optimize(objective, n_trials=10000, n_jobs=-1) # n_jobs=-1 używa wszystkich rdzeni procesora!
-            
+            self.study = study
             print("\n--- ZAKOŃCZONO OPTYMALIZACJĘ ---")
             best = study.best_trials
             lista=[]
@@ -201,7 +201,66 @@ class instrument_strategy():
                 'alpha':alpha}
         return pd.Series(dict)
         
-                   
+
+    
+
+    def get_all_pareto_fronts(self, study):
+        def dominates(t1: optuna.trial.FrozenTrial, t2: optuna.trial.FrozenTrial, directions):
+                """Checks if t1 dominates t2 across all study objectives."""
+                better_in_at_least_one = False
+                for v1, v2, direction in zip(t1.values, t2.values, directions):
+                    if direction == optuna.study.StudyDirection.MINIMIZE:
+                        if v1 > v2:
+                            return False
+                        if v1 < v2:
+                            better_in_at_least_one = True
+                    else:  # MAXIMIZE
+                        if v1 < v2:
+                            return False
+                        if v1 > v2:
+                            better_in_at_least_one = True
+                return better_in_at_least_one
+
+        
+        completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+
+        if not completed:
+            return []
+
+        S  = {t.number: [] for t in completed} #track dominated trials
+        n  = {t.number: 0 for t in completed} #track domination counts
+        fronts = [[]]
+
+        for p in completed:
+            for q in completed:
+                if p.number == q.number:
+                    continue
+                if dominates(p, q, study.directions):
+                    S[p.number].append(q)
+                elif dominates(q, p, study.directions):
+                    n[p.number] += 1
+
+            if n[p.number] == 0:
+                fronts[0].append(p)
+
+        i = 0
+        while i < len(fronts) and len(fronts[i]) > 0:
+            next_front = []
+            for p in fronts[i]:
+                for q in S[p.number]:
+                    n[q.number] -= 1
+                    if n[q.number] == 0:
+                        next_front.append(q)
+            i += 1
+            if next_front:
+                fronts.append(next_front)
+            else:
+                break
+
+        return fronts
+
+
+                  
         
     
 

@@ -30,4 +30,4 @@ def selection():
         print(selection_best)
         print(selection_best.iloc[0:6])
 
-selection()
+#selection()
