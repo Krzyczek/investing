@@ -224,6 +224,17 @@ class instrument_strategy():
         
         completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
 
+        # --- deduplicate by params ---
+        seen = set()
+        unique = []
+        for t in completed:
+            key = tuple(sorted(t.params.items()))  # dicts aren't hashable, tuples are
+            if key not in seen:
+                seen.add(key)
+                unique.append(t)
+        completed = unique
+        # -----------------------------
+
         if not completed:
             return []
 
