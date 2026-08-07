@@ -102,24 +102,41 @@ def parameter_robustness_test(deposit : int,instrument,pareto_fronts,safe_invest
             omega = strat_metrics.omega_ratio()
             calmar = strat_metrics.calmar_ratio()
             alpha = strat_metrics.alpha(benchmark_returns)
-            dict = {'sharpe': sharpe,
+            candidate_metrics = {'sharpe': sharpe,
                     'sortino':sortino,
                     'omega':omega,
                     'calmar':calmar,
                     'alpha':alpha}
             if not base_metrics:
-                base_metrics = dict
+                base_metrics = candidate_metrics
+                base_candidate = i+1
                 print(base_metrics)
+                continue
 
-            for key, values in base_metrics.items():
-                if key in dict:
-                    if dict[key] <= values:
-                        print(f"Candidate {i+1} on Front {layer_idx} has worse {key} ({dict[key]:.4f}) than the base candidate ({values:.4f}).")
+            for key, base_value in base_metrics.items():
+                if key in candidate_metrics:
+                    if candidate_metrics[key] < base_value:
+                        print(f"Candidate {i+1} on Front {layer_idx} has worse {key} "
+                              f"({candidate_metrics[key]:.4f}) than the base candidate ({base_value:.4f}).")
+                    elif candidate_metrics[key] > base_value:
+                        print(f"Candidate {i+1} on Front {layer_idx} has better {key} "
+                              f"({candidate_metrics[key]:.4f}) than the base candidate ({base_value:.4f}).")
                     else:
-                        print(f"Candidate {i+1} on Front {layer_idx} has better {key} ({dict[key]:.4f}) than the base candidate ({values:.4f}).")
+                        print(f"Candidate {i+1} on Front {layer_idx} has equal {key} "
+                              f"({candidate_metrics[key]:.4f}) to the base candidate.")
+
                 else:
                     print(f"Metric '{key}' not found in candidate metrics.")
 
+
+            key_metrics = ('sharpe', 'sortino', 'calmar')
+            any_key_better = any(candidate_metrics[k] > base_metrics[k] for k in key_metrics)
+            none_worse = all(candidate_metrics[k] >= base_metrics[k] for k in base_metrics)
+
+            if any_key_better and none_worse:
+                base_metrics = candidate_metrics
+                base_candidate = i + 1
+                print(f"--> Candidate {i+1} on Front {layer_idx} becomes the new base candidate.")
                     
 
         
