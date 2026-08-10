@@ -217,6 +217,17 @@ def candidate_parameter_robustness(price, deposit, instrument, safe_investment,
     per_param_report = {}
     all_columns_pass = True
 
+    # Base run is needed by the improvement loop (guide: adopt settings that
+    # improve drawdown/Sharpe/Sortino). Cached, so this is free on re-scans.
+    base_key = tuple(sorted(base_params.items()))
+    if base_key not in backtest_cache:
+        backtest_cache[base_key] = run_backtest(
+            price, deposit, instrument, safe_investment, mode,
+            benchmark_returns, base_params)
+    base_metrics = backtest_cache[base_key]
+    if base_metrics is None:
+        return False, None, "liquidated at base parameters"
+
     for param_name in PARAM_BOUNDS:
         lo, hi = PARAM_BOUNDS[param_name]
         # respect the fast_ma < slow_ma constraint while perturbing
@@ -245,7 +256,8 @@ def candidate_parameter_robustness(price, deposit, instrument, safe_investment,
 
             ok, greens, reds, colors = column_verdict(metrics)
             columns.append({'value': value, 'pass': ok,
-                            'greens': greens, 'reds': reds, 'colors': colors})
+                            'greens': greens, 'reds': reds, 'colors': colors,
+                            'metrics': metrics})
             if not ok:
                 all_columns_pass = False
                 if verbose:
@@ -268,7 +280,96 @@ def candidate_parameter_robustness(price, deposit, instrument, safe_investment,
 
     overall_cov = float(np.nanmean([r['param_cov']
                                     for r in per_param_report.values()]))
+    per_param_report['_base_metrics'] = base_metrics
     return all_columns_pass, overall_cov, per_param_report
+
+
+def improved(col_metrics, base_metrics):
+    """Guide's improvement rule: a perturbed setting is 'new and improved'
+    if it is no worse on drawdown, Sharpe and Sortino, and strictly better
+    on at least one of them."""
+    no_worse = (col_metrics['max_dd'] <= base_metrics['max_dd'] and
+                col_metrics['sharpe'] >= base_metrics['sharpe'] and
+                col_metrics['sortino'] >= base_metrics['sortino'])
+    strictly_better = (col_metrics['max_dd'] < base_metrics['max_dd'] or
+                       col_metrics['sharpe'] > base_metrics['sharpe'] or
+                       col_metrics['sortino'] > base_metrics['sortino'])
+    return no_worse and strictly_better
+
+
+def candidate_robustness_with_improvement(price, deposit, instrument,
+                                          safe_investment, mode,
+                                          benchmark_returns, base_params,
+                                          backtest_cache=None, verbose=False,
+                                          max_improvement_iters=3):
+    """Robustness scan + the guide's iterative improvement loop.
+
+    'If you stumble across new settings that improve the strategy's
+    performance overall (particularly the drawdown, Sharpe and Sortino)
+    ... do the same thing again with the new and improved setting.'
+
+    After each full scan, look for a PASSING column that `improved()` the
+    base. If found, promote it to the new base and re-scan around it.
+    Capped at max_improvement_iters to avoid endless hill-climbing (which
+    would itself be a form of overfitting to the test).
+
+    Returns (colors_ok, overall_cov, report, final_params)."""
+    if backtest_cache is None:
+        backtest_cache = {}
+
+    params = dict(base_params)
+    colors_ok, overall_cov, report = candidate_parameter_robustness(
+        price, deposit, instrument, safe_investment, mode,
+        benchmark_returns, params, backtest_cache, verbose)
+    if overall_cov is None:
+        return colors_ok, overall_cov, report, params
+
+    for _ in range(max_improvement_iters):
+        base_metrics = report['_base_metrics']
+
+        # best passing & improving column across all parameters
+        best = None
+        for param_name in PARAM_BOUNDS:
+            for col in report[param_name]['columns']:
+                if col['value'] == params[param_name]:
+                    continue                      # that's the base itself
+                if not col['pass']:
+                    continue                      # never adopt a failing column
+                if not improved(col['metrics'], base_metrics):
+                    continue
+                key = (col['metrics']['sortino'] - base_metrics['sortino']) \
+                    + (col['metrics']['sharpe'] - base_metrics['sharpe']) \
+                    + (base_metrics['max_dd'] - col['metrics']['max_dd'])
+                if best is None or key > best[0]:
+                    best = (key, param_name, col['value'])
+
+        if best is None:
+            break                                 # nothing better -> converged
+
+        _, param_name, value = best
+        if verbose:
+            print(f"    improvement: {param_name} "
+                  f"{params[param_name]} -> {value}, re-scanning...")
+        params[param_name] = value
+
+        # 'do the same thing again with the new and improved setting':
+        # full re-scan around the promoted base (cache makes this cheap)
+        new_ok, new_cov, new_report = candidate_parameter_robustness(
+            price, deposit, instrument, safe_investment, mode,
+            benchmark_returns, params, backtest_cache, verbose)
+        if new_cov is None:
+            # promoted base liquidates somewhere in its neighbourhood;
+            # 'sacrificing parameter robustness for performance' -> revert
+            params[param_name] = base_params[param_name]
+            break
+        if not new_ok and colors_ok:
+            # guide: keep the setting only if robustness is NOT sacrificed
+            params[param_name] = base_params[param_name]
+            break
+        colors_ok, overall_cov, report = new_ok, new_cov, new_report
+        base_params = dict(params)
+
+    return colors_ok, overall_cov, report, params
 
 
 def cov_class(overall_cov):
@@ -294,8 +395,13 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
     metrics and NO red (Cobra color table), and - if cov_threshold is given -
     the overall CoV is also <= cov_threshold (0.10 restricts to 1st Class).
 
-    As soon as one front contains at least one passing candidate, stop and
-    return ALL passing candidates of that front. Returns [] otherwise."""
+    Every front up to max_fronts is evaluated (front rank is based on the
+    optimisation objectives, which say nothing about robustness, so later
+    fronts can hold MORE robust candidates). All passing candidates are
+    returned sorted by overall CoV (most robust first), then front rank.
+    Each candidate is first run through the guide's improvement loop, so
+    the returned params may differ from the trial's originals. Returns []
+    if nothing passes."""
     dataframe = data_import.data_importer(instrument)
     dataframe.import_csv_file()
     price = dataframe.df
@@ -307,19 +413,21 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
 
     backtest_cache = {}   # avoids re-running duplicate parameter sets
 
+    passing_candidates = []
+    seen_params = set()   # improvement loop can converge to duplicates
+
     for layer_idx, front in enumerate(pareto_fronts, start=1):
         if layer_idx > max_fronts:
             break
         print(f"Evaluating Front {layer_idx} containing {len(front)} candidates...")
 
-        passing_candidates = []
-
         for i, trial in enumerate(front):
             base_params = {k: trial.params[k] for k in PARAM_BOUNDS}
 
-            colors_ok, overall_cov, report = candidate_parameter_robustness(
-                price, deposit, instrument, safe_investment, mode,
-                benchmark_returns, base_params, backtest_cache, verbose)
+            colors_ok, overall_cov, report, final_params = \
+                candidate_robustness_with_improvement(
+                    price, deposit, instrument, safe_investment, mode,
+                    benchmark_returns, base_params, backtest_cache, verbose)
 
             if overall_cov is None:
                 print(f"  Candidate {i+1}: DISQUALIFIED ({report})")
@@ -328,34 +436,41 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
             passed = colors_ok and (cov_threshold is None
                                     or overall_cov <= cov_threshold)
             per_param_str = ", ".join(
-                f"{p}={r['param_cov']:.2%}" for p, r in report.items())
+                f"{p}={r['param_cov']:.2%}" for p, r in report.items()
+                if not p.startswith('_'))
+            improved_str = ("" if final_params == base_params
+                            else f" (improved from {base_params})")
             print(f"  Candidate {i+1}: colors {'OK' if colors_ok else 'FAIL'}, "
                   f"overall CoV = {overall_cov:.2%} ({cov_class(overall_cov)}) "
                   f"-> {'PASS' if passed else 'fail'} "
-                  f"({per_param_str}) params={base_params}")
+                  f"({per_param_str}) params={final_params}{improved_str}")
 
             if passed:
-                base_run = run_backtest(price, deposit, instrument,
-                                        safe_investment, mode,
-                                        benchmark_returns, base_params)
+                params_key = tuple(sorted(final_params.items()))
+                if params_key in seen_params:
+                    continue
+                seen_params.add(params_key)
                 passing_candidates.append({
                     'front': layer_idx,
                     'candidate_idx': i + 1,
                     'trial': trial,
-                    'params': base_params,
+                    'params': final_params,
+                    'original_params': base_params,
                     'overall_cov': overall_cov,
                     'cov_class': cov_class(overall_cov),
                     'per_param': report,
-                    'base_metrics': base_run,
+                    'base_metrics': report['_base_metrics'],
                 })
 
-        if passing_candidates:
-            print(f"\nFront {layer_idx}: {len(passing_candidates)} candidate(s) "
-                  f"passed the Robustness Factory test. Stopping here.")
-            return passing_candidates
+    if not passing_candidates:
+        print("\nNo candidate on any evaluated front passed the robustness test.")
+        return []
 
-    print("\nNo candidate on any evaluated front passed the robustness test.")
-    return []
+    # Robustness first (the guide's priority), front rank as tie-breaker
+    passing_candidates.sort(key=lambda c: (c['overall_cov'], c['front']))
+    print(f"\n{len(passing_candidates)} candidate(s) passed across all "
+          f"evaluated fronts, sorted by overall CoV.")
+    return passing_candidates
 
 
 if __name__ == "__main__":
