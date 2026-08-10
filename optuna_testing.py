@@ -38,13 +38,14 @@ class instrument_strategy():
                 raise optuna.TrialPruned()
             adx_period = trial.suggest_int('adx_period',5,100,step=1)
             threshold = trial.suggest_int('threshold',5,50,step=1)
+            aroon_length = trial.suggest_int('aroon_length',5,100,step=1)
         
             test_df = price.copy()
             # --- OBLICZANIE SYGNAŁU (Z poprawkami znoszącymi wehikuł czasu) ---
             tpi_signal = tpi.tpi(test_df)
             #tpi_signal.calculate_perpetual(slow_ma_period,fast_ma_period)
             #tpi_signal.calculate_oscillator(adx_period,threshold)
-            tpi_signal.calculate_tpi(slow_ma_period,fast_ma_period,adx_period,threshold,'long_short')
+            tpi_signal.calculate_tpi(slow_ma_period,fast_ma_period,adx_period,threshold,aroon_length,'long_short')
             # 1. Sygnał na koniec dzisiejszego dnia
             test_df['signal'] = tpi_signal.signal
             test_df = test_df.loc[test_df.index >= '2018-01-01']
@@ -147,7 +148,7 @@ class instrument_strategy():
         tpi_signal = tpi.tpi(test_df)
         #tpi_signal.calculate_perpetual(slow_ma_period,fast_ma_period)
         #tpi_signal.calculate_oscillator(adx_period,threshold)
-        tpi_signal.calculate_tpi(self.slow_ma,self.fast_ma,self.adx_period,self.threshold,self.mode)
+        tpi_signal.calculate_tpi(self.slow_ma,self.fast_ma,self.adx_period,self.threshold,self.aroon_length,self.mode)
         # 1. Sygnał na koniec dzisiejszego dnia
         test_df['signal'] = tpi_signal.signal
         test_df = test_df.loc[test_df.index >= '2018-01-01']

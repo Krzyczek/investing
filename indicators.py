@@ -187,3 +187,53 @@ class adx():
         self.adx_values = self._wilder_smoothing(dx) / length
 
         return self.adx_values
+
+
+ 
+class aroon_oscillator():
+    """
+    Aroon Oscillator - odwzorowanie wskaźnika z TradingView (Pine Script v6):
+ 
+        [aroonUp, aroonDn] = TVta.aroon(length)
+        osc = aroonUp - aroonDn
+ 
+    Formuły (zgodne z ta.aroon z biblioteki TradingView/ta):
+        aroonUp = 100 * (length - bary_od_najwyższego_high) / length
+        aroonDn = 100 * (length - bary_od_najniższego_low)  / length
+    gdzie ekstrema szukane są w oknie `length + 1` świec (tak jak
+    ta.highestbars(high, length + 1) w Pine).
+ 
+    Wynik oscylatora mieści się w zakresie od -100 do 100.
+    """
+ 
+    def __init__(self, df: pd.DataFrame, aroon_length: int = 14, high: str = 'high', low: str = 'low') -> pd.Series:
+        self.df = df
+        self.aroon_length = aroon_length
+        self.high = high
+        self.low = low
+ 
+    @staticmethod
+    def _bars_since_max(values: np.ndarray) -> float:
+        # Odwracamy okno, żeby przy remisie wybrać NAJNOWSZĄ świecę
+        # (tak samo zachowuje się ta.highestbars w Pine Script).
+        return float(values[::-1].argmax())
+ 
+    @staticmethod
+    def _bars_since_min(values: np.ndarray) -> float:
+        return float(values[::-1].argmin())
+ 
+    def calculate(self) -> pd.Series:
+        length = self.aroon_length
+        window = length + 1  # Pine: ta.highestbars(high, length + 1)
+ 
+        bars_since_high = self.df[self.high].rolling(window).apply(self._bars_since_max, raw=True)
+        bars_since_low = self.df[self.low].rolling(window).apply(self._bars_since_min, raw=True)
+ 
+        self.aroon_up = 100 * (length - bars_since_high) / length
+        self.aroon_down = 100 * (length - bars_since_low) / length
+ 
+        # Oscylator = AroonUp - AroonDown (zakres -100..100)
+        self.osc = self.aroon_up - self.aroon_down
+        self.osc.name = f'aroon_osc_{length}'
+ 
+        return self.osc
