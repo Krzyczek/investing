@@ -32,16 +32,9 @@ class instrument_strategy():
         self.benchmark_returns = benchmark_metrics['return']
         
         def objective(trial):
-            fast_ma_period = trial.suggest_int('fast_ma',5,100,step=1)
-            slow_ma_period = trial.suggest_int('slow_ma',5,100,step=1)
-            if fast_ma_period >= slow_ma_period:
+            params = tpi.suggest_params(trial)
+            if not tpi.params_valid(params):
                 raise optuna.TrialPruned()
-            adx_period = trial.suggest_int('adx_period',5,100,step=1)
-            threshold = trial.suggest_int('threshold',5,50,step=1)
-            aroon_length = trial.suggest_int('aroon_length',5,100,step=1)
-            parabolic_sar_start = trial.suggest_float('parabolic_sar_start',0,1,step=0.01)
-            parabolic_sar_acceleration = trial.suggest_float('parabolic_sar_acceleration',0.01,0.1,step=0.01)
-            parabolic_sar_maximum = trial.suggest_float('parabolic_sar_maximum',0.1,1,step=0.1)
             
         
             test_df = price.copy()
@@ -49,7 +42,7 @@ class instrument_strategy():
             tpi_signal = tpi.tpi(test_df)
             #tpi_signal.calculate_perpetual(slow_ma_period,fast_ma_period)
             #tpi_signal.calculate_oscillator(adx_period,threshold)
-            tpi_signal.calculate_tpi(slow_ma_period,fast_ma_period,adx_period,threshold,aroon_length,parabolic_sar_start,parabolic_sar_acceleration,parabolic_sar_maximum,'long_short')
+            tpi_signal.calculate_tpi(params, 'long_short')
             # 1. Sygnał na koniec dzisiejszego dnia
             test_df['signal'] = tpi_signal.signal
             test_df = test_df.loc[test_df.index >= '2018-01-01']

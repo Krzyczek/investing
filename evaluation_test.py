@@ -9,17 +9,8 @@ import investment_metrics as im
 
 
 # --- Parameter search space (must mirror optuna_testing.objective) ---
-PARAM_BOUNDS = {
-    'fast_ma':    (5, 100),
-    'slow_ma':    (5, 100),
-    'adx_period': (5, 100),
-    'threshold':  (5, 50),
-    'aroon_length': (5, 100),
-    'parabolic_sar_start': (0.0, 1.0),
-    'parabolic_sar_acceleration': (0.01, 0.1),
-    'parabolic_sar_maximum': (0.1, 1.0)
-}
-STEP_SIZE = 1        # optuna uses step=1 for every parameter
+
+
 N_SIDE = 3           # 3 step-deviations on each side -> 7 columns total
 
 # The 7 metrics of the Cobra color table (used for green/red and CoV)
@@ -94,18 +85,11 @@ def run_backtest(price, deposit, instrument, safe_investment, mode,
     """Run one backtest for a given parameter set.
     Returns a metrics dict (7 table metrics + calmar/alpha), or None if the
     strategy got liquidated (automatic robustness failure)."""
-    fast_ma = params['fast_ma']
-    slow_ma = params['slow_ma']
-    adx_period = params['adx_period']
-    threshold = params['threshold']
-    aroon_length = params['aroon_length']
-    parabolic_sar_start = params['parabolic_sar_start']
-    parabolic_sar_acceleration = params['parabolic_sar_acceleration']
-    parabolic_sar_maximum = params['parabolic_sar_maximum']
+    
     test_df = price.copy()
     # --- OBLICZANIE SYGNAŁU (Z poprawkami znoszącymi wehikuł czasu) ---
     tpi_signal = tpi.tpi(test_df)
-    tpi_signal.calculate_tpi(slow_ma, fast_ma, adx_period, threshold, aroon_length,parabolic_sar_start,parabolic_sar_acceleration,parabolic_sar_maximum,'long_short')
+    tpi_signal.calculate_tpi(params, mode)
     # 1. Sygnał na koniec dzisiejszego dnia
     test_df['signal'] = tpi_signal.signal
     test_df = test_df.loc[test_df.index >= '2018-01-01']
@@ -191,10 +175,7 @@ def run_backtest(price, deposit, instrument, safe_investment, mode,
             'alpha':          strat_metrics.alpha(benchmark_returns)}
 
 
-def build_step_values(base, lo, hi, n_side=N_SIDE, step=STEP_SIZE):
-    """Build the step-deviation column values around `base`.
-    Follows the guide's rule: if you can't get n_side steps on one side,
-    shift the extra steps to the other side so no columns are empty."""
+def build_step_values(base, lo, hi, step, is_int, n_side=N_SIDE):
     total = 2 * n_side + 1
     start = base - n_side * step
     if start < lo:
@@ -202,8 +183,11 @@ def build_step_values(base, lo, hi, n_side=N_SIDE, step=STEP_SIZE):
     if start + (total - 1) * step > hi:
         start = hi - (total - 1) * step
     if start < lo:
-        return list(range(lo, hi + 1, step))
-    return [start + k * step for k in range(total)]
+        vals = np.arange(lo, hi + step / 2, step)   # float-safe fallback
+    else:
+        vals = start + step * np.arange(total)
+    vals = np.round(vals, 10)
+    return [int(v) for v in vals] if is_int else [float(v) for v in vals]
 
 
 def coefficient_of_variation(values):
@@ -248,15 +232,12 @@ def candidate_parameter_robustness(price, deposit, instrument, safe_investment,
     if base_metrics is None:
         return False, None, "liquidated at base parameters"
 
-    for param_name in PARAM_BOUNDS:
-        lo, hi = PARAM_BOUNDS[param_name]
+    for param_name, (ptype, lo, hi, step) in tpi.param_space().items():
+        step_values = build_step_values(step=step, is_int=(ptype == 'int'))
         # respect the fast_ma < slow_ma constraint while perturbing
-        if param_name == 'fast_ma':
-            hi = min(hi, base_params['slow_ma'] - 1)
-        elif param_name == 'slow_ma':
-            lo = max(lo, base_params['fast_ma'] + 1)
+        step_values = [v for v in step_values if tpi.params_valid({**base_params, param_name: v})]
 
-        step_values = build_step_values(base_params[param_name], lo, hi)
+        
 
         metric_series = {m: [] for m in TABLE_METRICS}
         columns = []
@@ -349,7 +330,7 @@ def candidate_robustness_with_improvement(price, deposit, instrument,
 
         # best passing & improving column across all parameters
         best = None
-        for param_name in PARAM_BOUNDS:
+        for param_name in tpi.param_space():
             for col in report[param_name]['columns']:
                 if col['value'] == params[param_name]:
                     continue                      # that's the base itself
@@ -442,7 +423,7 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
         print(f"Evaluating Front {layer_idx} containing {len(front)} candidates...")
         
         for i, trial in enumerate(front):
-            base_params = {k: trial.params[k] for k in PARAM_BOUNDS}
+            base_params = {k: trial.params[k] for k in tpi.param_space()}
 
             colors_ok, overall_cov, report, final_params = \
                 candidate_robustness_with_improvement(
