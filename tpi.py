@@ -26,8 +26,8 @@ class tpi():
         aroon = indicators.aroon_oscillator(self.df,self.aroon_length)
         aroon.calculate()
         self.adx_signal = np.where(adx.adx_values > self.threshold,1,np.where(adx.adx_values < self.threshold,-1,0))
-        self.aroon_signal = np.where(aroon.osc > 0,1,np.where(aroon.osc < 0,-1,0))
-        self.oscillator_signal = (self.adx_signal + self.aroon_signal)/2
+        #self.aroon_signal = np.where(aroon.osc > 0,1,np.where(aroon.osc < 0,-1,0))
+        self.oscillator_signal = self.adx_signal
 
 
     def calculate_tpi(self,slow_ema_length: int, fast_ema_length: int, adx_length: int, threshold: int,aroon_length: int,mode : str = 'long_only'):

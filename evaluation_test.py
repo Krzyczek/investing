@@ -26,6 +26,19 @@ TABLE_METRICS = ('max_dd', 'sortino', 'sharpe', 'profit_factor',
 MIN_GREEN = 5        # "5/7 green metrics at least and NO RED" per column
 
 
+def dedupe_fronts(pareto_fronts):
+    seen = set()
+    clean = []
+    for front in pareto_fronts:
+        kept = []
+        for trial in front:
+            key = tuple(sorted(trial.params.items()))
+            if key not in seen:
+                seen.add(key)
+                kept.append(trial)
+        clean.append(kept)
+    return clean
+
 def eval(deposit: int, instrument, safe_investment: float = 0.03):
 
     strat_1 = optuna_testing.instrument_strategy('CDR.WA', instrument, deposit, safe_investment)
@@ -421,7 +434,7 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
         if layer_idx > max_fronts:
             break
         print(f"Evaluating Front {layer_idx} containing {len(front)} candidates...")
-
+        
         for i, trial in enumerate(front):
             base_params = {k: trial.params[k] for k in PARAM_BOUNDS}
 
@@ -476,6 +489,7 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
 
 if __name__ == "__main__":
     pareto = eval(12000, 'crypto', 0)
+    pareto = dedupe_fronts(pareto)
     robust_candidates = parameter_robustness_test(12000, 'crypto', pareto, 0)
     for c in robust_candidates:
         print(f"Front {c['front']} candidate {c['candidate_idx']}: "

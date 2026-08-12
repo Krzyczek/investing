@@ -52,7 +52,13 @@ class instrument_strategy():
             
             # 2. PRZESUNIĘCIE SYGNAŁU (Likwidacja wehikułu czasu)
             shifted_signal = test_df['signal'].shift(1).fillna(0)
-            
+            number_of_trades = (shifted_signal.diff().abs() > 0).sum()
+
+            position_changes = shifted_signal.diff().fillna(0)
+            num_trades = int((position_changes != 0).sum())
+            trial.set_user_attr('num_trades', num_trades)
+            if not (40 < num_trades <= 100):
+                raise optuna.TrialPruned()
             # 3. Zyski i Kapitał
             test_df['strat_return'] = test_df['return'] * shifted_signal
             test_df['equity'] = self.deposit * (1 + test_df['strat_return']).cumprod()
@@ -108,7 +114,7 @@ class instrument_strategy():
             study = optuna.create_study(directions=['maximize','maximize','maximize'])
             
             print("Rozpoczynam poszukiwanie najlepszych parametrów...")
-            study.optimize(objective, n_trials=50000, n_jobs=-1) # n_jobs=-1 używa wszystkich rdzeni procesora!
+            study.optimize(objective, n_trials=10000, n_jobs=-1) # n_jobs=-1 używa wszystkich rdzeni procesora!
             self.study = study
             print("\n--- ZAKOŃCZONO OPTYMALIZACJĘ ---")
             best = study.best_trials
