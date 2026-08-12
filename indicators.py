@@ -237,3 +237,113 @@ class aroon_oscillator():
         self.osc.name = f'aroon_osc_{length}'
  
         return self.osc
+
+
+class parabolic_sar():
+    """
+    Parabolic SAR - odwzorowanie wbudowanego wskaźnika z TradingView (Pine Script v6):
+ 
+        out = ta.sar(start, increment, maximum)
+ 
+    Implementacja jest portem oficjalnego pseudokodu `ta.sar` z dokumentacji Pine,
+    więc wartości (łącznie z momentami odwrócenia trendu i klampowaniem do low/high
+    z 1-2 poprzednich świec) odpowiadają 1:1 temu, co rysuje TradingView.
+ 
+    Zasada działania:
+        - trend rosnący:  SAR = SAR_prev + AF * (EP - SAR_prev), rysowany POD ceną
+        - trend malejący: SAR analogicznie, rysowany NAD ceną
+        - EP (extreme point) = najwyższy high / najniższy low bieżącego trendu
+        - AF (acceleration factor) startuje od `start`, rośnie o `increment`
+          przy każdym nowym ekstremum, maksymalnie do `maximum`
+        - przebicie SAR przez cenę odwraca trend i resetuje AF
+ 
+    Zwraca pd.Series; pierwsza świeca ma wartość NaN (SAR startuje od drugiej,
+    tak samo jak w Pine).
+    """
+ 
+    def __init__(self, df: pd.DataFrame, start: float = 0.02, increment: float = 0.02,
+                 maximum: float = 0.2, high: str = 'high', low: str = 'low',
+                 close: str = 'close') -> pd.Series:
+        self.df = df
+        self.start = start
+        self.increment = increment
+        self.maximum = maximum
+        self.high = high
+        self.low = low
+        self.close = close
+ 
+    def calculate(self) -> pd.Series:
+        high = self.df[self.high].to_numpy(dtype='float64')
+        low = self.df[self.low].to_numpy(dtype='float64')
+        close = self.df[self.close].to_numpy(dtype='float64')
+ 
+        n = len(close)
+        sar = np.full(n, np.nan)
+ 
+        if n < 2:
+            self.sar_values = pd.Series(sar, index=self.df.index, name='parabolic_sar')
+            return self.sar_values
+ 
+        # --- inicjalizacja na drugiej świecy (bar_index == 1 w Pine) ---
+        result = np.nan        # bieżąca wartość SAR
+        max_min = np.nan       # EP - extreme point bieżącego trendu
+        acceleration = np.nan  # AF - acceleration factor
+        is_below = None        # True = SAR pod ceną (trend rosnący)
+ 
+        if close[1] > close[0]:
+            is_below = True
+            max_min = high[1]
+            result = low[0]
+        else:
+            is_below = False
+            max_min = low[1]
+            result = high[0]
+        acceleration = self.start
+        sar[1] = result
+ 
+        # --- główna pętla, od trzeciej świecy ---
+        for i in range(2, n):
+            is_first_trend_bar = False
+ 
+            # krok paraboliczny
+            result = result + acceleration * (max_min - result)
+ 
+            # sprawdzenie odwrócenia trendu (przebicie SAR przez cenę)
+            if is_below:
+                if result > low[i]:
+                    is_first_trend_bar = True
+                    is_below = False
+                    result = max(high[i], max_min)
+                    max_min = low[i]
+                    acceleration = self.start
+            else:
+                if result < high[i]:
+                    is_first_trend_bar = True
+                    is_below = True
+                    result = min(low[i], max_min)
+                    max_min = high[i]
+                    acceleration = self.start
+ 
+            # aktualizacja EP i przyspieszenie AF (tylko gdy trend trwa)
+            if not is_first_trend_bar:
+                if is_below:
+                    if high[i] > max_min:
+                        max_min = high[i]
+                        acceleration = min(acceleration + self.increment, self.maximum)
+                else:
+                    if low[i] < max_min:
+                        max_min = low[i]
+                        acceleration = min(acceleration + self.increment, self.maximum)
+ 
+            # klampowanie: SAR nie może wejść w zakres 1-2 poprzednich świec
+            if is_below:
+                result = min(result, low[i - 1])
+                result = min(result, low[i - 2])
+            else:
+                result = max(result, high[i - 1])
+                result = max(result, high[i - 2])
+ 
+            sar[i] = result
+ 
+        self.sar_values = pd.Series(sar, index=self.df.index, name='parabolic_sar')
+        return self.sar_values

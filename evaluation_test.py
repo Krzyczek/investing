@@ -14,7 +14,10 @@ PARAM_BOUNDS = {
     'slow_ma':    (5, 100),
     'adx_period': (5, 100),
     'threshold':  (5, 50),
-    'aroon_length': (5, 100)
+    'aroon_length': (5, 100),
+    'parabolic_sar_start': (0.0, 1.0),
+    'parabolic_sar_acceleration': (0.01, 0.1),
+    'parabolic_sar_maximum': (0.1, 1.0)
 }
 STEP_SIZE = 1        # optuna uses step=1 for every parameter
 N_SIDE = 3           # 3 step-deviations on each side -> 7 columns total
@@ -96,10 +99,13 @@ def run_backtest(price, deposit, instrument, safe_investment, mode,
     adx_period = params['adx_period']
     threshold = params['threshold']
     aroon_length = params['aroon_length']
+    parabolic_sar_start = params['parabolic_sar_start']
+    parabolic_sar_acceleration = params['parabolic_sar_acceleration']
+    parabolic_sar_maximum = params['parabolic_sar_maximum']
     test_df = price.copy()
     # --- OBLICZANIE SYGNAŁU (Z poprawkami znoszącymi wehikuł czasu) ---
     tpi_signal = tpi.tpi(test_df)
-    tpi_signal.calculate_tpi(slow_ma, fast_ma, adx_period, threshold, aroon_length, mode)
+    tpi_signal.calculate_tpi(slow_ma, fast_ma, adx_period, threshold, aroon_length,parabolic_sar_start,parabolic_sar_acceleration,parabolic_sar_maximum,'long_short')
     # 1. Sygnał na koniec dzisiejszego dnia
     test_df['signal'] = tpi_signal.signal
     test_df = test_df.loc[test_df.index >= '2018-01-01']

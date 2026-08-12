@@ -38,10 +38,14 @@ def parameter_robustness_test(deposit : int,instrument,pareto_fronts,safe_invest
         for i in range(len(front)):
             
             params = front[i].params
-            fast_ma = params['fast_ma']
-            slow_ma = params['slow_ma']
+            fast_ma_period = params['fast_ma_period']
+            slow_ma_period = params['slow_ma_period']
             adx_period = params['adx_period']
             threshold = params['threshold']
+            aroon_length = params['aroon_length']
+            parabolic_sar_start = params['parabolic_sar_start']
+            parabolic_sar_acceleration = params['parabolic_sar_acceleration']
+            parabolic_sar_maximum = params['parabolic_sar_maximum']
 
             #Strat testing
             benchmark_metrics = buyhold_data.buyhold_benchmark(price.loc['2018-01-01':], deposit, instrument, safe_investment)
@@ -55,7 +59,7 @@ def parameter_robustness_test(deposit : int,instrument,pareto_fronts,safe_invest
             tpi_signal = tpi.tpi(test_df)
             #tpi_signal.calculate_perpetual(slow_ma_period,fast_ma_period)
             #tpi_signal.calculate_oscillator(adx_period,threshold)
-            tpi_signal.calculate_tpi(slow_ma,fast_ma,adx_period,threshold,mode)
+            tpi_signal.calculate_tpi(slow_ma_period,fast_ma_period,adx_period,threshold,aroon_length,parabolic_sar_start,parabolic_sar_acceleration,parabolic_sar_maximum,'long_short')
             # 1. Sygnał na koniec dzisiejszego dnia
             test_df['signal'] = tpi_signal.signal
             test_df = test_df.loc[test_df.index >= '2018-01-01']
