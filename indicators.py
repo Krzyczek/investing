@@ -347,3 +347,183 @@ class parabolic_sar():
  
         self.sar_values = pd.Series(sar, index=self.df.index, name='parabolic_sar')
         return self.sar_values
+
+
+# ---------------------------------------------------------------
+# Fragment do wklejenia w tpi.py, jeśli chcesz podpiąć Supertrend
+# pod TPI (sekcja "signal functions" + wpis w COMPONENTS).
+# ---------------------------------------------------------------
+
+class supertrend():
+    """
+    Supertrend - odwzorowanie wbudowanego wskaźnika z TradingView (Pine Script v6):
+
+        [supertrend, direction] = ta.supertrend(factor, atrPeriod)
+
+    Implementacja jest portem oficjalnego pseudokodu `ta.supertrend` z dokumentacji
+    Pine, więc wartości linii oraz momenty odwrócenia trendu odpowiadają 1:1 temu,
+    co rysuje TradingView.
+
+    Zasada działania:
+        - src = hl2 = (high + low) / 2
+        - atr = ta.atr(atrPeriod)  -> wygładzanie Wildera (RMA) z True Range
+        - upperBand = src + factor * atr,  lowerBand = src - factor * atr
+        - pasma są "zapadkowe" (ratchet): lowerBand może tylko rosnąć,
+          a upperBand tylko maleć, dopóki cena zamknięcia ich nie przebije
+        - direction == -1  -> trend rosnący, linia = lowerBand (w Pine zielona)
+          direction ==  1  -> trend malejący, linia = upperBand (w Pine czerwona)
+
+    UWAGA co do konwencji znaku: w Pine `direction < 0` oznacza UPTREND
+    (dlatego oryginał rysuje `direction < 0 ? supertrend : na` na zielono).
+    Zachowuję tę samą konwencję, żeby wyniki dały się porównać z TradingView.
+
+    Zwraca pd.Series z linią Supertrend; pierwsza świeca ma wartość NaN
+    (odpowiednik `supertrend := barstate.isfirst ? na : supertrend`), a świece
+    z okresu rozgrzewki ATR również są NaN (w Pine mają tam wartości śmieciowe
+    wynikające z nz(...) == 0).
+
+    Dodatkowe atrybuty po wywołaniu calculate():
+        - self.supertrend_values : pd.Series - linia Supertrend
+        - self.direction         : pd.Series - -1 (uptrend) / 1 (downtrend)
+        - self.signal            : pd.Series -  1 (long)    / -1 (short)
+        - self.up_trend          : pd.Series - linia tylko w trendzie rosnącym (reszta NaN)
+        - self.down_trend        : pd.Series - linia tylko w trendzie malejącym (reszta NaN)
+        - self.to_uptrend        : pd.Series[bool] - alert 'Downtrend to Uptrend'
+        - self.to_downtrend      : pd.Series[bool] - alert 'Uptrend to Downtrend'
+        - self.trend_change      : pd.Series[bool] - alert 'Trend Change'
+
+    Elementy czysto wizualne z oryginału (plot.style_linebr, bodyMiddle,
+    fill(...) dla tła trendu) nie mają odpowiednika w tej warstwie - do wykresu
+    wystarczą serie self.up_trend / self.down_trend.
+    """
+
+    def __init__(self, df: pd.DataFrame, atr_period: int = 10, factor: float = 3.0,
+                 high: str = 'high', low: str = 'low', close: str = 'close') -> pd.Series:
+        self.df = df
+        self.atr_period = max(int(atr_period), 1)      # Pine: minval = 1
+        self.factor = max(float(factor), 0.01)         # Pine: minval = 0.01
+        self.high = high
+        self.low = low
+        self.close = close
+
+    def _true_range(self) -> np.ndarray:
+        """
+        True Range zgodny z ta.tr(true):
+        na pierwszej świecy (brak close[1]) TR = high - low.
+        """
+        high = self.df[self.high].to_numpy(dtype='float64')
+        low = self.df[self.low].to_numpy(dtype='float64')
+        close = self.df[self.close].to_numpy(dtype='float64')
+
+        prev_close = np.roll(close, 1)
+        tr = np.maximum(
+            high - low,
+            np.maximum(np.abs(high - prev_close), np.abs(low - prev_close))
+        )
+        if len(tr) > 0:
+            tr[0] = high[0] - low[0]
+        return tr
+
+    def _atr(self, tr: np.ndarray) -> np.ndarray:
+        """
+        ta.atr = ta.rma(ta.tr(true), length):
+        - pierwsza wartość (na indeksie length-1) = SMA z pierwszych `length` TR
+        - kolejne = (TR + (length-1) * poprzednia) / length
+        Świece przed rozgrzewką pozostają NaN (tak jak atr w Pine).
+        """
+        length = self.atr_period
+        n = len(tr)
+        atr = np.full(n, np.nan)
+
+        if n < length:
+            return atr
+
+        atr[length - 1] = tr[:length].mean()
+        for i in range(length, n):
+            atr[i] = (tr[i] + (length - 1) * atr[i - 1]) / length
+        return atr
+
+    def calculate(self) -> pd.Series:
+        df = self.df
+        close = df[self.close].to_numpy(dtype='float64')
+        src = ((df[self.high].to_numpy(dtype='float64')
+                + df[self.low].to_numpy(dtype='float64')) / 2.0)     # hl2
+
+        atr = self._atr(self._true_range())
+        n = len(close)
+
+        supertrend_line = np.full(n, np.nan)
+        direction = np.full(n, np.nan)
+
+        # nz(lowerBand[1]) / nz(upperBand[1]) w Pine dają 0 na pierwszej świecy
+        prev_lower = 0.0
+        prev_upper = 0.0
+        prev_supertrend = np.nan
+
+        for i in range(n):
+            # surowe pasma; przy NaN w ATR porównania w Pine są fałszywe,
+            # więc pasmo "dziedziczy" poprzednią wartość
+            raw_upper = src[i] + self.factor * atr[i]
+            raw_lower = src[i] - self.factor * atr[i]
+
+            # zapadka: lowerBand rośnie, chyba że poprzednie zamknięcie ją przebiło
+            if raw_lower > prev_lower or (i > 0 and close[i - 1] < prev_lower):
+                lower = raw_lower
+            else:
+                lower = prev_lower
+
+            # zapadka: upperBand maleje, chyba że poprzednie zamknięcie ją przebiło
+            if raw_upper < prev_upper or (i > 0 and close[i - 1] > prev_upper):
+                upper = raw_upper
+            else:
+                upper = prev_upper
+
+            # NaN po prawej stronie porównania = warunek fałszywy (semantyka Pine)
+            if np.isnan(lower):
+                lower = prev_lower
+            if np.isnan(upper):
+                upper = prev_upper
+
+            # kierunek trendu
+            if i == 0 or np.isnan(atr[i - 1]):
+                # w Pine: na(atr[1]) ? 1 : ...  -> start zawsze jako downtrend
+                current_direction = 1.0
+            elif prev_supertrend == prev_upper:
+                current_direction = -1.0 if close[i] > upper else 1.0
+            else:
+                current_direction = 1.0 if close[i] < lower else -1.0
+
+            current_supertrend = lower if current_direction == -1.0 else upper
+
+            direction[i] = current_direction
+            supertrend_line[i] = current_supertrend
+
+            prev_lower = lower
+            prev_upper = upper
+            prev_supertrend = current_supertrend
+
+        # supertrend := barstate.isfirst ? na : supertrend
+        # + świece z rozgrzewki ATR (w Pine wychodzą z nz(...) == 0)
+        supertrend_line[np.isnan(atr)] = np.nan
+        if n > 0:
+            supertrend_line[0] = np.nan
+
+        index = df.index
+        self.supertrend_values = pd.Series(supertrend_line, index=index, name='supertrend')
+        self.direction = pd.Series(direction, index=index, name='supertrend_direction')
+
+        # plot(direction < 0 ? supertrend : na) / plot(direction < 0 ? na : supertrend)
+        self.up_trend = self.supertrend_values.where(self.direction < 0)
+        self.down_trend = self.supertrend_values.where(self.direction >= 0)
+
+        # sygnał w konwencji TPI: 1 = long, -1 = short
+        self.signal = pd.Series(np.where(self.direction < 0, 1, -1), index=index,
+                                name='supertrend_signal')
+
+        # alertcondition(...)
+        prev_direction = self.direction.shift(1)
+        self.to_uptrend = prev_direction > self.direction     # Downtrend -> Uptrend
+        self.to_downtrend = prev_direction < self.direction   # Uptrend -> Downtrend
+        self.trend_change = prev_direction != self.direction
+
+        return self.supertrend_values

@@ -233,8 +233,12 @@ def candidate_parameter_robustness(price, deposit, instrument, safe_investment,
         return False, None, "liquidated at base parameters"
 
     for param_name, (ptype, lo, hi, step) in tpi.param_space().items():
-        step_values = build_step_values(step=step, is_int=(ptype == 'int'))
-        # respect the fast_ma < slow_ma constraint while perturbing
+        step_values = build_step_values(
+            base=base_params[param_name],
+            lo=lo, hi=hi,
+            step=step,
+            is_int=(ptype == 'int'),
+            )        # respect the fast_ma < slow_ma constraint while perturbing
         step_values = [v for v in step_values if tpi.params_valid({**base_params, param_name: v})]
 
         
@@ -423,7 +427,7 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
         print(f"Evaluating Front {layer_idx} containing {len(front)} candidates...")
         
         for i, trial in enumerate(front):
-            base_params = {k: trial.params[k] for k in tpi.param_space()}
+            base_params = tpi.params_from_trial(trial)
 
             colors_ok, overall_cov, report, final_params = \
                 candidate_robustness_with_improvement(

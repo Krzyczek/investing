@@ -55,7 +55,7 @@ class instrument_strategy():
             num_trades = int((position_changes != 0).sum())
             trial.set_user_attr('num_trades', num_trades)
             if not (40 < num_trades <= 100):
-                raise optuna.TrialPruned()
+                return [-1000,0]
             # 3. Zyski i Kapitał
             test_df['strat_return'] = test_df['return'] * shifted_signal
             test_df['equity'] = self.deposit * (1 + test_df['strat_return']).cumprod()
@@ -88,12 +88,12 @@ class instrument_strategy():
             test_df['equity_low'] = test_df['equity_low'].fillna(self.deposit)
             
             if (1 + test_df['strat_return'] <= 0).any():
-                raise optuna.TrialPruned()   # strategy was liquidated on a short
+                return [-1000,0]   # strategy was liquidated on a short
             running_peak = test_df['equity'].cummax()
             max_drawdown = ((test_df['equity'] - running_peak) / running_peak).min()
 
             if max_drawdown < -0.60:   # reject strategies that lost >60% from peak
-                raise optuna.TrialPruned()
+                return [-1000,0]
             strat_metrics = im.metrics(df=test_df,investment_type = self.instrument_type,risk_free_rate = self.risk_free_rate,returns_column = 'strat_return',starting_equity=self.deposit,high='equity_high',low='equity_low',close='equity',verbose=False)
             sharpe = strat_metrics.sharpe_ratio()
             sortino = strat_metrics.sortino_ratio()
@@ -104,14 +104,14 @@ class instrument_strategy():
            
 
             
-            return sortino, calmar, alpha
+            return round(sortino, 4), round(calmar, 4)
         
         if __name__ != "__main__":
             # Opcja 'maximize' mówi Optunie, że im większy wynik z return, tym lepiej
-            study = optuna.create_study(directions=['maximize','maximize','maximize'])
+            study = optuna.create_study(directions=['maximize','maximize'])
             
             print("Rozpoczynam poszukiwanie najlepszych parametrów...")
-            study.optimize(objective, n_trials=50000, n_jobs=-1) # n_jobs=-1 używa wszystkich rdzeni procesora!
+            study.optimize(objective, n_trials=5000, n_jobs=-1) # n_jobs=-1 używa wszystkich rdzeni procesora!
             self.study = study
             print("\n--- ZAKOŃCZONO OPTYMALIZACJĘ ---")
             best = study.best_trials

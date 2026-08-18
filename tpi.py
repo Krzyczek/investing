@@ -1,4 +1,5 @@
 import numpy as np
+from decimal import Decimal
 import indicators
 
 # =====================================================================
@@ -50,6 +51,16 @@ def _aroon_signal(df, p):
     ar.calculate()
     return np.where(ar.osc > 0, 1, np.where(ar.osc < 0, -1, 0))
 
+def _supertrend_signal(df, p):
+    st = indicators.supertrend(
+        df,
+        atr_period=p['supertrend_atr_period'],
+        factor=p['supertrend_factor'],
+    )
+    st.calculate()
+    # direction < 0 == uptrend (konwencja Pine), więc long przy -1
+    return np.where(st.direction < 0, 1, -1)
+
 
 # ---------- the registry: THE single source of truth ----------
 
@@ -86,6 +97,14 @@ COMPONENTS = {
             'aroon_length': ('int', 5, 100, 1),
         },
     },
+    'supertrend': {
+        'group': 'perpetual',
+        'signal': _supertrend_signal,
+        'params': {
+            'supertrend_atr_period': ('int', 5, 50, 1),
+            'supertrend_factor':     ('float', 1.0, 10.0, 0.1),
+        },
+    },
 }
 
 # Cross-parameter validity rules. A trial whose params fail any rule
@@ -97,6 +116,23 @@ CONSTRAINTS = [
 
 
 # ---------- generic machinery (never needs editing) ----------
+
+def params_from_trial(trial) -> dict:
+    """Inverse of suggest_params: rebuild the runtime param dict from a
+    (Frozen)Trial. suggest_params stores float params as int '<name>_scaled',
+    so trial.params cannot be indexed with param_space() names directly."""
+    out = {}
+    for name, (ptype, low, high, step) in param_space().items():
+        if name in trial.params:
+            out[name] = trial.params[name]
+        elif f'{name}_scaled' in trial.params:
+            out[name] = round(trial.params[f'{name}_scaled'] * step, 10)
+        else:
+            raise KeyError(
+                f"trial {getattr(trial, 'number', '?')} has neither "
+                f"'{name}' nor '{name}_scaled' - search space changed since the study ran"
+            )
+    return out
 
 def param_space() -> dict:
     """Merged search space of every component, keyed by param name."""
@@ -114,13 +150,26 @@ def param_space() -> dict:
 
 def suggest_params(trial) -> dict:
     """Build the full parameter dict from an optuna trial.
-    The objective function calls this instead of listing suggest_* lines."""
+    The objective function calls this instead of listing suggest_* lines.
+
+    Float parameters are sampled on an integer scale so Optuna uses exact
+    decimal increments (0.01, 0.1, etc.) instead of float precision drift.
+    """
     params = {}
     for name, (ptype, low, high, step) in param_space().items():
         if ptype == 'int':
             params[name] = trial.suggest_int(name, low, high, step=step)
         elif ptype == 'float':
-            params[name] = trial.suggest_float(name, low, high, step=step)
+            if step <= 0:
+                raise ValueError(f"Float step for '{name}' must be > 0")
+
+            decimal_step = Decimal(str(step))
+            scale = 10 ** (-decimal_step.as_tuple().exponent) if decimal_step.as_tuple().exponent < 0 else 1
+            low_i = int(round(low * scale))
+            high_i = int(round(high * scale))
+            step_i = int(round(step * scale))
+
+            params[name] = trial.suggest_int(f'{name}_scaled', low_i, high_i, step=step_i) / scale
         else:
             raise ValueError(f"Unknown param type '{ptype}' for '{name}'")
     return params
