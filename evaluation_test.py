@@ -24,8 +24,8 @@ MIN_GREEN = 5        # "5/7 green metrics at least and NO RED" per column
 #   table -> (red below, green from, green up to; red above)
 #   main: red <40 or >105, yellow 40-44, green 45-105
 #   alt:  red <30 or >95,  yellow 30-34, green 35-95
-# The table is always chosen explicitly (table='main'|'alt'); there is no
-# automatic rule based on history length.
+# table=None/'auto' (the default) picks the table from the history length
+# via select_table() below; an explicit table='main'|'alt' overrides it.
 TRADE_COUNT_BANDS = {'main': (40, 45, 105),
                      'alt':  (30, 35, 95)}
 COLOR_TABLES = tuple(TRADE_COUNT_BANDS)
