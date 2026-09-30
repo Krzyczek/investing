@@ -127,6 +127,8 @@ COMPONENTS = {
 # component is part of the selected subset.
 CONSTRAINTS = [
     ('ema_cross', lambda p: p['fast_ma'] < p['slow_ma']),
+    # AF startowy nie może przekraczać maksymalnego (inaczej acceleration nic nie zmienia)
+    ('parabolic_sar', lambda p: p['parabolic_sar_start'] <= p['parabolic_sar_maximum']),
 ]
 
 
