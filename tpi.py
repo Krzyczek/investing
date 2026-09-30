@@ -164,7 +164,12 @@ def params_from_trial(trial, components=None) -> dict:
         if name in trial.params:
             out[name] = trial.params[name]
         elif f'{name}_scaled' in trial.params:
-            out[name] = round(trial.params[f'{name}_scaled'] * step, 10)
+            # inverse of suggest_params: the scaled int is value * scale (scale = 10**decimals
+            # of step), NOT value / step - the two only agree when step == 1/scale
+            # (e.g. 0.01, 0.1); for step 0.0005 value*step was 5x too large.
+            exp = Decimal(str(step)).as_tuple().exponent
+            scale = 10 ** (-exp) if exp < 0 else 1
+            out[name] = round(trial.params[f'{name}_scaled'] / scale, 10)
         else:
             raise KeyError(
                 f"trial {getattr(trial, 'number', '?')} has neither "
