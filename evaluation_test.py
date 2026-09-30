@@ -355,7 +355,8 @@ def run_backtest(price, deposit, instrument, safe_investment, mode,
             # extra metrics for the downstream pipeline (not in the table)
             'calmar':         strat_metrics.calmar_ratio(),
             'alpha':          strat_metrics.alpha(benchmark_returns),
-            'close_max_dd':   close_max_dd}
+            'close_max_dd':   close_max_dd,
+            'total_return':   strat_metrics.total_return()}   # % (hold-out gate)
 
 
 def build_step_values(base, lo, hi, step, is_int, n_side=N_SIDE):
@@ -757,11 +758,86 @@ def holdout_report(deposit: int, instrument, params: dict, in_sample_end: str,
         else:
             for m in TABLE_METRICS:
                 print(f"  {m:15s} {metrics[m]:10.4f}  {report['colors'][m]}")
+            print(f"  total return {metrics['total_return']:.3f}%, sortino {metrics['sortino']:.4f}")
             print(f"  calmar {metrics['calmar']:.4f}, alpha vs B&H {metrics['alpha']:.2f} pp "
                   f"(B&H return {benchmark['return']:.2f}%) -> "
                   f"{report['greens']} green / {report['reds']} red, "
                   f"{'PASS' if report['passed'] else 'FAIL'}")
     return report
+
+
+# ---------- final acceptance gate (hold-out) ----------
+# Decided with Krzyczek: a tuned TPI that has ALREADY passed the in-sample
+# colour-table robustness test is ACCEPTED only if, on the hold-out,
+#     total return > 0  AND  Sortino > 0
+# (investment_metrics.sortino_ratio exactly as implemented, same risk-free
+# rate). No comparison with buy-and-hold, no ratio to in-sample. If nothing
+# is accepted the result is 'no accepted TPI': no substitute is ever chosen
+# (no textbook params, no best-of-failing).
+
+def accept_tpi(robustness_passed: bool, holdout: dict) -> dict:
+    """Verdict for ONE candidate. `holdout` is a holdout_report() dict (or
+    None when there is no hold-out). Returns verdict 'ACCEPTED'/'REJECTED',
+    the reason, and the hold-out total return (%) and Sortino."""
+    tr = so = None
+    if holdout is not None and holdout.get('metrics') is not None:
+        tr = holdout['metrics']['total_return']
+        so = holdout['metrics']['sortino']
+    reasons = []
+    if not robustness_passed:
+        reasons.append('failed the in-sample colour-table robustness test')
+    if holdout is None:
+        reasons.append('no hold-out period (in_sample_end not set)')
+    elif holdout.get('skipped'):
+        reasons.append(f"asset skipped: {holdout.get('reason')}")
+    elif holdout.get('metrics') is None:
+        reasons.append('liquidated on the hold-out')
+    else:
+        if not tr > 0:
+            reasons.append(f'hold-out total return {tr:.3f}% <= 0')
+        if not so > 0:          # NaN (no activity) also fails
+            reasons.append(f'hold-out Sortino {so:.4f} <= 0')
+    accepted = not reasons
+    return {'verdict': 'ACCEPTED' if accepted else 'REJECTED', 'accepted': accepted,
+            'reason': 'hold-out total return > 0 and Sortino > 0' if accepted
+                      else '; '.join(reasons),
+            'holdout_total_return': tr, 'holdout_sortino': so}
+
+
+def final_acceptance(deposit: int, instrument, robust_candidates, in_sample_end: str,
+                     safe_investment: float = 0.0, mode: str = 'long_short',
+                     table: str = None, *, ticker: str, data_dir: str = None,
+                     file_path: str = None, start: str = '2018-01-01') -> dict:
+    """Final step after parameter_robustness_test: run the hold-out gate on
+    every robust candidate. Returns {'accepted': [...], 'results': [...],
+    'message': ...}. With nothing accepted it reports 'no accepted TPI' and
+    returns an empty 'accepted' list - no fallback is chosen."""
+    results, accepted = [], []
+    for c in robust_candidates:
+        ho = None
+        if in_sample_end is not None:
+            ho = holdout_report(deposit, instrument, c['params'], in_sample_end,
+                                safe_investment, mode, table, c.get('components'),
+                                ticker=ticker, data_dir=data_dir, file_path=file_path,
+                                start=start)
+        v = accept_tpi(True, ho)     # candidates here already passed robustness
+        fmt = lambda x, f: 'n/a' if x is None else format(x, f)
+        print(f"[acceptance] front {c.get('front')} candidate {c.get('candidate_idx')}: "
+              f"hold-out total return {fmt(v['holdout_total_return'], '.3f')}%, "
+              f"Sortino {fmt(v['holdout_sortino'], '.4f')} -> {v['verdict']} ({v['reason']})")
+        results.append({**v, 'candidate': c, 'holdout': ho})
+        if v['accepted']:
+            accepted.append({**c, 'holdout': ho, 'verdict': v})
+    if accepted:
+        msg = f"{len(accepted)} accepted TPI candidate(s) for {ticker}"
+    elif not robust_candidates:
+        msg = (f"no accepted TPI for {ticker}: no candidate passed the in-sample "
+               f"robustness test (no substitute chosen)")
+    else:
+        msg = (f"no accepted TPI for {ticker}: no robust candidate passed the hold-out "
+               f"gate (no substitute chosen)")
+    print(f"[acceptance] {msg}")
+    return {'accepted': accepted, 'results': results, 'message': msg}
 
 
 if __name__ == "__main__":
@@ -772,12 +848,20 @@ if __name__ == "__main__":
     RISK_FREE = 0
     MODE = 'long_short'
     TABLE = None                   # None = automatyczny wybór main/alt wg długości historii
+    IN_SAMPLE_END = None           # np. '2025-03-31'; bez hold-outu bramka akceptacji odrzuca
 
-    pareto = eval(DEPOSIT, INSTRUMENT_TYPE, RISK_FREE, ticker=TICKER, mode=MODE, table=TABLE)
+    pareto = eval(DEPOSIT, INSTRUMENT_TYPE, RISK_FREE, ticker=TICKER, mode=MODE, table=TABLE,
+                  in_sample_end=IN_SAMPLE_END)
+    if isinstance(pareto, AssetSkipped):
+        raise SystemExit(f"{TICKER}: skipped ({pareto.reason})")
     pareto = dedupe_fronts(pareto)
     robust_candidates = parameter_robustness_test(DEPOSIT, INSTRUMENT_TYPE, pareto, RISK_FREE,
-                                                  mode=MODE, table=TABLE, ticker=TICKER)
+                                                  mode=MODE, table=TABLE, ticker=TICKER,
+                                                  in_sample_end=IN_SAMPLE_END)
     for c in robust_candidates:
         print(f"Front {c['front']} candidate {c['candidate_idx']}: "
               f"CoV={c['overall_cov']:.2%} ({c['cov_class']}), "
               f"params={c['params']}, metrics={c['base_metrics']}")
+    # końcowa bramka: hold-out total return > 0 i Sortino > 0
+    final = final_acceptance(DEPOSIT, INSTRUMENT_TYPE, robust_candidates, IN_SAMPLE_END,
+                             RISK_FREE, MODE, TABLE, ticker=TICKER)
