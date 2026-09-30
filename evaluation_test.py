@@ -19,6 +19,33 @@ TABLE_METRICS = ('max_dd', 'sortino', 'sharpe', 'profit_factor',
 
 MIN_GREEN = 5        # "5/7 green metrics at least and NO RED" per column
 
+# Two Cobra tables: 'main' and 'alt' ("with min 3 yr data"). They are
+# identical except for the # of trades bands:
+#   table -> (red below, green from, green up to; red above)
+#   main: red <40 or >105, yellow 40-44, green 45-105
+#   alt:  red <30 or >95,  yellow 30-34, green 35-95
+# The table is always chosen explicitly (table='main'|'alt'); there is no
+# automatic rule based on history length.
+TRADE_COUNT_BANDS = {'main': (40, 45, 105),
+                     'alt':  (30, 35, 95)}
+COLOR_TABLES = tuple(TRADE_COUNT_BANDS)
+
+
+def check_table(table):
+    if table not in TRADE_COUNT_BANDS:
+        raise ValueError(f"table must be one of {COLOR_TABLES}, got {table!r}")
+    return table
+
+
+def count_trades(position) -> int:
+    """THE trade definition used everywhere (Optuna filter, robustness table,
+    reports): the number of non-flat position segments. A segment is a run of
+    consecutive bars with the same position; flat (0) runs are not trades.
+    long -> short is two trades, long -> flat -> long is two trades."""
+    pos = pd.Series(np.asarray(position, dtype=float)).fillna(0)
+    segment_start = pos != pos.shift()
+    return int((segment_start & (pos != 0)).sum())
+
 
 def dedupe_fronts(pareto_fronts):
     seen = set()
@@ -45,9 +72,11 @@ def eval(deposit: int, instrument, safe_investment: float = 0.03):
     return pareto_fronts
 
 
-def classify_metric(name, value):
-    """Return 'green', 'yellow' or 'red' according to the Cobra table.
+def classify_metric(name, value, table='main'):
+    """Return 'green', 'yellow' or 'red' according to the Cobra table
+    (table='main' or 'alt'; they differ only in num_trades).
     max_dd is a POSITIVE fraction (0.25 == 25%), pct_profitable a fraction."""
+    check_table(table)
     if not np.isfinite(value):
         # inf profit factor (no losing trades) is the best possible outcome
         if name == 'profit_factor' and value == np.inf:
@@ -64,17 +93,18 @@ def classify_metric(name, value):
     if name == 'pct_profitable':
         return 'red' if value < 0.35 else ('green' if value > 0.50 else 'yellow')
     if name == 'num_trades':
-        if value < 40 or value > 105:
+        red_below, green_from, green_to = TRADE_COUNT_BANDS[table]
+        if value < red_below or value > green_to:
             return 'red'
-        return 'green' if value >= 45 else 'yellow'
+        return 'green' if value >= green_from else 'yellow'
     if name == 'omega':
         return 'red' if value < 1.1 else ('green' if value > 1.31 else 'yellow')
     raise ValueError(f"Unknown metric {name}")
 
 
-def column_verdict(metrics):
+def column_verdict(metrics, table='main'):
     """Apply the guide's per-column rule: >=5/7 green and NO red."""
-    colors = {m: classify_metric(m, metrics[m]) for m in TABLE_METRICS}
+    colors = {m: classify_metric(m, metrics[m], table) for m in TABLE_METRICS}
     greens = sum(1 for c in colors.values() if c == 'green')
     reds = sum(1 for c in colors.values() if c == 'red')
     return (greens >= MIN_GREEN and reds == 0), greens, reds, colors
@@ -104,6 +134,10 @@ def run_backtest(price, deposit, instrument, safe_investment, mode,
     # Liquidation check (same rule as in the optuna objective)
     if (1 + test_df['strat_return'] <= 0).any():
         return None
+
+    # Close-based max drawdown (used by the optuna ">60% from peak" rule)
+    running_peak = test_df['equity'].cummax()
+    close_max_dd = abs(((test_df['equity'] - running_peak) / running_peak).min())
 
     # 4. Zwroty wewnątrzdzienne (High/Low)
     test_df['return_high'] = (test_df['high'] - test_df['close'].shift(1)) / test_df['close'].shift(1)
@@ -151,7 +185,7 @@ def run_backtest(price, deposit, instrument, safe_investment, mode,
             continue                        # flat period, not a trade
         trade_returns.append((1 + seg['strat_return']).prod() - 1)
 
-    num_trades = len(trade_returns)
+    num_trades = count_trades(pos)          # == len(trade_returns)
     if num_trades > 0:
         wins = [r for r in trade_returns if r > 0]
         losses = [r for r in trade_returns if r < 0]
@@ -172,7 +206,8 @@ def run_backtest(price, deposit, instrument, safe_investment, mode,
             'omega':          strat_metrics.omega_ratio(),
             # extra metrics for the downstream pipeline (not in the table)
             'calmar':         strat_metrics.calmar_ratio(),
-            'alpha':          strat_metrics.alpha(benchmark_returns)}
+            'alpha':          strat_metrics.alpha(benchmark_returns),
+            'close_max_dd':   close_max_dd}
 
 
 def build_step_values(base, lo, hi, step, is_int, n_side=N_SIDE):
@@ -205,7 +240,8 @@ def coefficient_of_variation(values):
 
 def candidate_parameter_robustness(price, deposit, instrument, safe_investment,
                                    mode, benchmark_returns, base_params,
-                                   backtest_cache=None, verbose=False):
+                                   backtest_cache=None, verbose=False,
+                                   table='main'):
     """Robustness Factory parameter test for one candidate.
 
     For every parameter: perturb it over +-N_SIDE step deviations, run the
@@ -259,7 +295,7 @@ def candidate_parameter_robustness(price, deposit, instrument, safe_investment,
             if metrics is None:
                 return False, None, f"liquidated at {param_name}={value}"
 
-            ok, greens, reds, colors = column_verdict(metrics)
+            ok, greens, reds, colors = column_verdict(metrics, table)
             columns.append({'value': value, 'pass': ok,
                             'greens': greens, 'reds': reds, 'colors': colors,
                             'metrics': metrics})
@@ -306,7 +342,8 @@ def candidate_robustness_with_improvement(price, deposit, instrument,
                                           safe_investment, mode,
                                           benchmark_returns, base_params,
                                           backtest_cache=None, verbose=False,
-                                          max_improvement_iters=3):
+                                          max_improvement_iters=3,
+                                          table='main'):
     """Robustness scan + the guide's iterative improvement loop.
 
     'If you stumble across new settings that improve the strategy's
@@ -325,7 +362,7 @@ def candidate_robustness_with_improvement(price, deposit, instrument,
     params = dict(base_params)
     colors_ok, overall_cov, report = candidate_parameter_robustness(
         price, deposit, instrument, safe_investment, mode,
-        benchmark_returns, params, backtest_cache, verbose)
+        benchmark_returns, params, backtest_cache, verbose, table=table)
     if overall_cov is None:
         return colors_ok, overall_cov, report, params
 
@@ -361,7 +398,7 @@ def candidate_robustness_with_improvement(price, deposit, instrument,
         # full re-scan around the promoted base (cache makes this cheap)
         new_ok, new_cov, new_report = candidate_parameter_robustness(
             price, deposit, instrument, safe_investment, mode,
-            benchmark_returns, params, backtest_cache, verbose)
+            benchmark_returns, params, backtest_cache, verbose, table=table)
         if new_cov is None:
             # promoted base liquidates somewhere in its neighbourhood;
             # 'sacrificing parameter robustness for performance' -> revert
@@ -392,7 +429,8 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
                               mode: str = 'long_short',
                               cov_threshold: float = None,
                               max_fronts: int = 10,
-                              verbose: bool = False):
+                              verbose: bool = False,
+                              table: str = 'main'):
     """Walk the Pareto fronts in order and run the Robustness Factory
     parameter test on every candidate of each front.
 
@@ -406,7 +444,8 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
     returned sorted by overall CoV (most robust first), then front rank.
     Each candidate is first run through the guide's improvement loop, so
     the returned params may differ from the trial's originals. Returns []
-    if nothing passes."""
+    if nothing passes. `table` selects the Cobra table ('main' or 'alt')."""
+    check_table(table)
     dataframe = data_import.data_importer(instrument)
     dataframe.import_csv_file()
     price = dataframe.df
@@ -432,7 +471,8 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
             colors_ok, overall_cov, report, final_params = \
                 candidate_robustness_with_improvement(
                     price, deposit, instrument, safe_investment, mode,
-                    benchmark_returns, base_params, backtest_cache, verbose)
+                    benchmark_returns, base_params, backtest_cache, verbose,
+                    table=table)
 
             if overall_cov is None:
                 print(f"  Candidate {i+1}: DISQUALIFIED ({report})")

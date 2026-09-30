@@ -18,7 +18,7 @@ class instrument_strategy():
         self.risk_free_rate = risk_free_rate
         
 
-    def strategy_evaluation(self):
+    def strategy_evaluation(self, table: str = 'main'):
         dataframe = data_import.data_importer(self.instrument)
         dataframe.import_csv_file()
         price = dataframe.df
@@ -29,80 +29,35 @@ class instrument_strategy():
         self.benchmark_metrics = benchmark_metrics
         self.benchmark_returns = benchmark_metrics['return']
         
+        # Jedna definicja backtestu i liczby transakcji dla Optuny i testu
+        # odporności: evaluation_test.run_backtest (te same kroki co wcześniej
+        # tutaj: sygnał TPI na pełnej historii, przesunięcie o 1 dzień, kapitał
+        # close/high/low, metryki). Import leniwy, bo evaluation_test importuje
+        # ten moduł.
+        import evaluation_test
+        evaluation_test.check_table(table)
+
         def objective(trial):
             params = tpi.suggest_params(trial)
             if not tpi.params_valid(params):
                 raise optuna.TrialPruned()
-            
-        
-            test_df = price.copy()
-            # --- OBLICZANIE SYGNAŁU (Z poprawkami znoszącymi wehikuł czasu) ---
-            tpi_signal = tpi.tpi(test_df)
-            #tpi_signal.calculate_perpetual(slow_ma_period,fast_ma_period)
-            #tpi_signal.calculate_oscillator(adx_period,threshold)
-            tpi_signal.calculate_tpi(params, 'long_short')
-            # 1. Sygnał na koniec dzisiejszego dnia
-            test_df['signal'] = tpi_signal.signal
-            test_df = test_df.loc[test_df.index >= '2018-01-01']
-            
-            # 2. PRZESUNIĘCIE SYGNAŁU (Likwidacja wehikułu czasu)
-            shifted_signal = test_df['signal'].shift(1).fillna(0)
-            number_of_trades = (shifted_signal.diff().abs() > 0).sum()
 
-            position_changes = shifted_signal.diff().fillna(0)
-            num_trades = int((position_changes != 0).sum())
-            trial.set_user_attr('num_trades', num_trades)
-            if not (40 < num_trades <= 100):
-                return [-1000,0]
-            # 3. Zyski i Kapitał
-            test_df['strat_return'] = test_df['return'] * shifted_signal
-            test_df['equity'] = self.deposit * (1 + test_df['strat_return']).cumprod()
-            
-            # 4. Zwroty wewnątrzdzienne (High/Low)
-            test_df['return_high'] = (test_df['high'] - test_df['close'].shift(1)) / test_df['close'].shift(1)
-            test_df['return_low'] = (test_df['low'] - test_df['close'].shift(1)) / test_df['close'].shift(1)
-            
-            # 5. Kapitał High/Low z użyciem prawidłowego (przesuniętego) sygnału
-            prev_equity = test_df['equity'].shift(1).fillna(self.deposit)
-            rh = test_df['return_high'].fillna(0)
-            rl = test_df['return_low'].fillna(0)
-            
-            conditions = [shifted_signal == 1, shifted_signal == -1]
-            # best intraday outcome
-            test_df['equity_high'] = np.select(conditions,
-                [prev_equity * (1 + rh),      # long: high is best
-                prev_equity * (1 - rl)],     # short: low is best
-                default=prev_equity)
-            
-            # worst intraday outcome
-            test_df['equity_low'] = np.select(conditions,
-                [prev_equity * (1 + rl),      # long: low is worst
-                prev_equity * (1 - rh)],     # short: high is worst
-                default=prev_equity)
-                     
-            # 6. BEZPIECZNE wypełnianie braków (tylko dla kolumn kapitałowych!)
-            test_df['equity'] = test_df['equity'].fillna(self.deposit)
-            test_df['equity_high'] = test_df['equity_high'].fillna(self.deposit)
-            test_df['equity_low'] = test_df['equity_low'].fillna(self.deposit)
-            
-            if (1 + test_df['strat_return'] <= 0).any():
+            m = evaluation_test.run_backtest(price, self.deposit, self.instrument_type,
+                                             self.risk_free_rate, 'long_short',
+                                             self.benchmark_returns, params)
+            if m is None:
                 return [-1000,0]   # strategy was liquidated on a short
-            running_peak = test_df['equity'].cummax()
-            max_drawdown = ((test_df['equity'] - running_peak) / running_peak).min()
 
-            if max_drawdown < -0.60:   # reject strategies that lost >60% from peak
+            num_trades = m['num_trades']      # non-flat position segments
+            trial.set_user_attr('num_trades', num_trades)
+            # odrzucamy tylko CZERWONY zakres liczby transakcji z wybranej tabeli
+            if evaluation_test.classify_metric('num_trades', num_trades, table) == 'red':
                 return [-1000,0]
-            strat_metrics = im.metrics(df=test_df,investment_type = self.instrument_type,risk_free_rate = self.risk_free_rate,returns_column = 'strat_return',starting_equity=self.deposit,high='equity_high',low='equity_low',close='equity',verbose=False)
-            sharpe = strat_metrics.sharpe_ratio()
-            sortino = strat_metrics.sortino_ratio()
-            omega = strat_metrics.omega_ratio()
-            calmar = strat_metrics.calmar_ratio()
-            alpha = strat_metrics.alpha(self.benchmark_returns)
 
-           
+            if m['close_max_dd'] > 0.60:   # reject strategies that lost >60% from peak
+                return [-1000,0]
 
-            
-            return round(sortino, 4), round(calmar, 4)
+            return round(m['sortino'], 4), round(m['calmar'], 4)
         
         if __name__ != "__main__":
             # Opcja 'maximize' mówi Optunie, że im większy wynik z return, tym lepiej
