@@ -92,11 +92,12 @@ COMPONENTS = {
         'signal': _parabolic_sar_signal,
         'params': {
             'parabolic_sar_start':        ('float', 0.0, 1.0, 0.01),
-            # tuning search space changed 30 Sep 2026 (Krzyczek): was 0.01-0.1 step 0.01;
-            # widened down to 0.0005 (step 0.0005) so the TPI trade-count horizon grid
-            # 60/70/80 is reachable with start/maximum at textbook (BTC-USD 2018-2025/03:
-            # 0.0005 -> 63 trades, 0.001 -> 71, 0.0015 -> 83; 0.01 gave 156)
-            'parabolic_sar_acceleration': ('float', 0.0005, 0.1, 0.0005),
+            # tuning search space changed 30 Sep 2026 (Krzyczek): was 0.01-0.1 step 0.01.
+            # Minimal range in which every target T of the horizon grid 60/70/80 is
+            # reached, i.e. some value gives T +-1 trades (run_backtest count, BTC-USD
+            # in-sample 2018-01-01..2025-03-31, start 0.02 / maximum 0.2 at textbook):
+            # 0.0004 -> 61, 0.001 -> 71, 0.0013 -> 81 (the only value at 79-81); 0.01 -> 156
+            'parabolic_sar_acceleration': ('float', 0.0004, 0.1, 0.0001),
             'parabolic_sar_maximum':      ('float', 0.1, 1.0, 0.1),
         },
     },

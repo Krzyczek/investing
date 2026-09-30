@@ -70,19 +70,26 @@ All of these are built and reference-checked. None is reviewed yet, so none may 
 
 ## Tuning search space changed 30 Sep (Krzyczek)
 
-Widened minimally so every trade-count target of the set-coherence horizon grid (60/70/80 trades, within +-10, BTC-USD in-sample 2018-01-01 to 2025-03-31, other params at textbook) is reachable without a scaling fallback. Details: `/workspace/ta/runs/proto_coherence/BTC-USD/v2/widened_ranges.{json,md}`.
+Widened minimally so that every trade-count target of the set-coherence horizon grid is REACHED. A target T (60, 70 or 80) counts as reached if some valid value gives T±1 trades; the ±1 allows for flip parity. Trades are counted the way run_backtest counts them, on BTC-USD in-sample 2018-01-01 to 2025-03-31, with the other params at textbook. There is no scaling fallback. Details and evidence: `/workspace/ta/runs/proto_coherence/BTC-USD/v2/widened_ranges.{json,md}`.
 
-| indicator | param | old | new | where |
-|---|---|---|---|---|
-| Parabolic SAR | `parabolic_sar_acceleration` | 0.01-0.1 step 0.01 | **0.0005-0.1 step 0.0005** (0.0005 -> 63 trades, 0.001 -> 71, 0.0015 -> 83) | this branch (`tpi.py`); start 0.0-1.0 and max 0.1-1.0 unchanged, `start <= maximum` kept (`tests/test_psar_search_space.py`) |
-| TEMA | `tema_length` | 5-150 | **5-400** | lands on `ind-tema` (builder A); flags: count not monotone in length, ~3n warm-up at n=400 |
-| MACD | `macd_fast` | 2-50 | **2-56** (slow 5-100, signal 2-50 unchanged, `fast < slow` kept) | lands on `ind-macd` (builder B); the x3.65 scaling fallback is gone |
+| indicator | param | old | new | reached at 60 / 70 / 80 | where |
+|---|---|---|---|---|---|
+| Parabolic SAR | `parabolic_sar_acceleration` | 0.01-0.1 step 0.01 | **0.0004-0.1 step 0.0001** | 0.0004→61 / 0.001→71 / 0.0013→81 | this branch (`tpi.py`). Start 0.0-1.0 and max 0.1-1.0 are unchanged, and `start <= maximum` is kept (`tests/test_psar_search_space.py`) |
+| TEMA | `tema_length` | 5-150 | **5-452** | 452→60 / 399→70 / 252→79-81 | `ind-tema` (builder A, f85895c; agrees) |
+| MACD | `macd_fast` | 2-50 | **2-74** (slow 5-100, signal 2-50 unchanged, `fast < slow` kept) | 74/100→61 / 50/100→71 / 50/51→79 | `ind-macd` (builder B has 2-61 / 5-200 at 0c2d1e6, which is valid but not minimal; to be aligned) |
 
-Any set run that contains `parabolic_sar`, `tema` or `macd` must log "tuning search space changed 30 Sep" with the old/new ranges above.
+Any set run that contains `parabolic_sar`, `tema` or `macd` must log "tuning search space changed 30 Sep" together with the old and new ranges above.
 
 ## Set coherence v2 (`set_coherence.py`, approved by Krzyczek 30 Sep)
 
-Sets of 5-7 are ranked with `set_coherence.rank_pool` (see the module docstring): pool-wide horizon matching per target, 9 configs (targets 60/70/80 x holds 15/20/30), C = 0.4 F1 + 0.3 timing + 0.3 A, precision veto < 0.3, cluster rule (> 0.9 agreement), final order by median rank, then spread, IQR, C at 70/20. It uses whatever components are registered.
+Sets of 5-7 are ranked with `set_coherence.rank_pool`; see the module docstring. It uses pool-wide horizon matching per target and 9 configs (targets 60/70/80 x holds 15/20/30), with C = 0.4 F1 + 0.3 timing + 0.3 A. Sets are excluded by a precision veto (< 0.3) and by a cluster rule (> 0.9 agreement). It works with whatever components are registered.
+
+**v2.1 fixes (30 Sep):**
+1. The cluster rule uses each pair's MEDIAN agreement across targets 60/70/80. It is computed once per pool, and the same clusters apply to all 9 configs.
+2. A leave-one-out vote of exactly 0 HOLDS the previous leave-one-out position, like the zero-score hold rule (flat until the first non-zero score). It is no longer broken with the full-set score.
+3. The final order is median rank, then C at 70/20, then spread, then IQR.
+4. Trades are counted as run_backtest counts them (one-bar lag).
+5. MACD is matched natively on (fast, slow).
 
 ## Note on earlier solo results
 

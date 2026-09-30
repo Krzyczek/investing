@@ -1,4 +1,5 @@
-"""Set-level time coherence (v2, approved by Krzyczek 30 Sep 2026).
+"""Set-level time coherence (v2.1: v2 approved by Krzyczek 30 Sep 2026, plus
+the v2.1 fixes of 30 Sep: median-agreement clusters, leave-one-out ties hold).
 
 Scores whole candidate TPI sets (5-7 components) on how coherently their
 members flip with the set's own consensus, and ranks all sets of a pool over
@@ -13,7 +14,13 @@ or the middle of the range when a component has no textbook value). The
 value is picked from the longest plateau of values whose in-sample trade
 count is within +-tol of the target (nearest-to-target, then nearest to
 textbook); if no value gets within +-tol, the closest reachable value is used
-and the member is flagged 'NOT horizon-matched' (it still competes).
+and the member is flagged 'NOT horizon-matched' (it still competes). A knob
+can be a pair of params (MACD: fast and slow, native values, no scaling);
+then the whole valid 2-D grid is scanned and the valid cell closest to the
+target is picked (tie -> nearest to textbook in grid steps); its 'plateau' is
+the number of its 4 grid neighbours that are also within +-tol.
+Trades are counted as run_backtest counts them (v2.1): evaluation_test.
+count_trades on the hold-rule position lagged by one bar inside the window.
 
 Consensus (as the TPI builds it, equal weights): the mean of the members' RAW
 signals (+1/0/-1), turned into a position with the framework hold rule
@@ -24,9 +31,11 @@ Note: the TPI itself averages inside groups first (tpi.calculate_tpi); the
 coherence consensus uses the plain equal-weight mean.
 
 Leave-one-out: member i is scored against the consensus of the OTHER
-members; a leave-one-out score of exactly 0 is broken with the FULL-set
-score (then the hold rule if that is 0 too). Note: when the others sum to
-0 the full-set score equals member i's own vote / k.
+members (mean of their raw signals). A leave-one-out score of exactly 0
+HOLDS the previous leave-one-out position (the same zero-score hold rule as
+the TPI; if the first bars are 0 it stays flat until the first non-zero
+score). v2.1: ties are no longer broken with the full-set score (that leaked
+member i's own vote into its own consensus).
 
 Member flips for recall/precision: the DEBOUNCED raw signal (raw -> hold
 rule -> the same `hold`-bar confirmation as the consensus).
@@ -40,12 +49,15 @@ A         = mean pairwise sign agreement of the members' hold-rule positions
 C         = 0.4 F1 + 0.3 timing + 0.3 A                       (no CV term)
 Rules     : precision veto (any member precision < precision_veto, 0.3);
             cluster rule (at most one member per connected cluster of
-            pairwise agreement > cluster_threshold, 0.9, at the target's
-            matched params). Pairs in (0.85, 0.9] are reported, not enforced.
+            pairwise agreement > cluster_threshold, 0.9). v2.1: the agreement
+            used is each pair's MEDIAN agreement across the targets (each at
+            that target's matched params), computed once per pool, so the same
+            clusters apply to all 9 configs. Pairs with median agreement in
+            (0.85, 0.9] are reported, not enforced.
 Ranking   : every set is ranked by C in each (target, hold) config (default
             60/70/80 x 15/20/30); a set excluded in a config gets rank
-            n_ranked + 1 there. Final order: median rank, then spread
-            (max - min), then IQR, then C at 70/20.
+            n_ranked + 1 there. Final order (v2.1): median rank, then C at
+            70/20 (higher first), then spread (max - min), then IQR.
 
 In-sample only: pass the price series cut at the in-sample end; bars before
 `start` are warm-up.
@@ -84,7 +96,7 @@ KNOB = {
     'supertrend': 'supertrend_factor', 'adx': 'adx_period', 'aroon': 'aroon_length',
     'donchian': 'donchian_entry_length', 'keltner': 'kc_multiplier', 'rsi50': 'rsi_length',
     'roc': 'roc_length', 'hull': 'hull_length', 'tema': 'tema_length',
-    'vortex': 'vortex_length', 'bollinger': 'bollinger_mult', 'macd': 'macd_signal',
+    'vortex': 'vortex_length', 'bollinger': 'bollinger_mult', 'macd': ('macd_fast', 'macd_slow'),
     'cci': 'cci_length', 'kama': 'kama_fast',
 }
 
@@ -121,7 +133,11 @@ def member_arrays(price, comp, params, start='2018-01-01'):
 
 
 def trades(pos):
-    return int(et.count_trades(np.asarray(pos)))
+    """Trades of a window position as run_backtest counts them (one-bar lag:
+    the first bar of the window is flat, the last bar's new position is not
+    traded)."""
+    pos = np.asarray(pos)
+    return int(et.count_trades(np.r_[0, pos[:-1]])) if len(pos) else 0
 
 
 def pick(values, counts, textbook_value, target, tol=PLATEAU_TOL):
@@ -152,31 +168,69 @@ def pick(values, counts, textbook_value, target, tol=PLATEAU_TOL):
     return k, False, None
 
 
+def _counts(price, c, tb, keys, specs, start, cache):
+    """Valid grid cells and their trade counts (cached across targets)."""
+    grids = [grid(sp) for sp in specs]
+    cells, counts = [], []
+    for vals in itertools.product(*grids):
+        p = {**tb, **dict(zip(keys, vals))}
+        if not tpi.params_valid(p, [c]):
+            continue
+        ck = (c, start, str(price.index[-1]), len(price), tuple(sorted(p.items())))
+        if ck not in cache:
+            cache[ck] = trades(member_arrays(price, c, p, start)[1])
+        cells.append(vals)
+        counts.append(cache[ck])
+    return grids, cells, counts
+
+
+def pick2d(grids, cells, counts, tb_vals, target, tol=PLATEAU_TOL):
+    """Closest-to-target valid cell of a 2-D grid (tie -> nearest to textbook
+    in grid steps). Returns (index, matched, n of 4 neighbours within tol)."""
+    counts = np.asarray(counts, dtype=float)
+    pos = [{v: i for i, v in enumerate(g)} for g in grids]
+    tbi = [int(np.argmin([abs(float(v) - float(t)) for v in g])) for g, t in zip(grids, tb_vals)]
+    ij = np.array([[pos[0][a], pos[1][b]] for a, b in cells])
+    d = np.abs(counts - target)
+    best = np.flatnonzero(d == d.min())
+    k = int(min(best, key=lambda m: abs(ij[m, 0] - tbi[0]) + abs(ij[m, 1] - tbi[1])))
+    ok = d <= tol
+    lookup = {tuple(x): o for x, o in zip(ij, ok)}
+    nb = sum(lookup.get((ij[k, 0] + a, ij[k, 1] + b), False) for a, b in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+    return k, bool(ok[k]), int(nb)
+
+
 def horizon_match(price, comps, target, start='2018-01-01', tol=PLATEAU_TOL, knobs=None,
-                  space_override=None, base=None):
+                  space_override=None, base=None, cache=None):
     """Match each component's primary knob to `target` trades. Returns
-    (table, params) with params[comp] = full param dict."""
+    (table, params) with params[comp] = full param dict. Pass the same
+    `cache` dict for several targets to count each grid cell once."""
     knobs = {**KNOB, **(knobs or {})}
     space_override = space_override or {}
+    cache = {} if cache is None else cache
     rows, params = [], {}
     for c in comps:
         tb = textbook(c, base)
         key = knobs[c]
-        spec = space_override.get(key, tpi.COMPONENTS[c]['params'][key])
-        vals, counts = [], []
-        for g in grid(spec):
-            p = {**tb, key: g}
-            if tpi.params_valid(p, [c]):
-                vals.append(g)
-                counts.append(trades(member_arrays(price, c, p, start)[1]))
-        k, ok, plateau = pick(vals, counts, tb[key], target, tol)
-        params[c] = {**tb, key: vals[k]}
-        rows.append(dict(target=target, component=c, param=key, value=vals[k], trades=counts[k],
-                         matched=ok, flag='' if ok else 'NOT horizon-matched',
-                         plateau=None if plateau is None else (vals[plateau[0]], vals[plateau[1]]),
+        keys = list(key) if isinstance(key, (tuple, list)) else [key]
+        specs = [space_override.get(k, tpi.COMPONENTS[c]['params'][k]) for k in keys]
+        grids, cells, counts = _counts(price, c, tb, keys, specs, start, cache)
+        if len(keys) == 1:
+            vals = [x[0] for x in cells]
+            k, ok, plateau = pick(vals, counts, tb[keys[0]], target, tol)
+            plateau = None if plateau is None else (vals[plateau[0]], vals[plateau[1]])
+        else:
+            k, ok, plateau = pick2d(grids, cells, counts, [tb[x] for x in keys], target, tol)
+            plateau = f'{plateau}/4 neighbours within tol'
+        chosen = dict(zip(keys, cells[k]))
+        params[c] = {**tb, **chosen}
+        rows.append(dict(target=target, component=c, param='/'.join(keys),
+                         value='/'.join(str(v) for v in cells[k]), trades=counts[k],
+                         matched=ok, flag='' if ok else 'NOT horizon-matched', plateau=plateau,
                          scan_min=min(counts), scan_max=max(counts),
-                         search_space=spec, space_overridden=key in space_override,
-                         held_fixed={kk: vv for kk, vv in tb.items() if kk != key}))
+                         search_space=specs if len(specs) > 1 else specs[0],
+                         space_overridden=any(x in space_override for x in keys),
+                         held_fixed={kk: vv for kk, vv in tb.items() if kk not in keys}))
     return pd.DataFrame(rows), params
 
 
@@ -277,12 +331,19 @@ class Pool:
         self.w = window_w(target, self.T)
         both = (self.pos[:, None] != 0) & (self.pos[None] != 0)
         self.agree = ((self.pos[:, None] == self.pos[None]) & both).sum(-1) / np.maximum(both.sum(-1), 1)
-        self.comp, self.cluster_groups = clusters(self.agree, self.names, cluster_threshold)
-        self.watch = [(a, b, round(float(self.agree[i, j]), 3))
-                      for (i, a), (j, b) in itertools.combinations(enumerate(self.names), 2)
-                      if WATCH_BAND[0] < self.agree[i, j] <= WATCH_BAND[1]]
+        # per-target clusters until apply_clusters() sets the pool-wide ones
+        self.apply_clusters(self.agree, cluster_threshold)
         self.flips = {h: [major_flip_events(p, h) for p in self.pos] for h in holds}
         self.n_trades = np.array([trades(p) for p in self.pos.astype(int)])
+
+    def apply_clusters(self, agree, cluster_threshold=CLUSTER_THRESHOLD):
+        """Set the cluster rule from an agreement matrix (v2.1: the
+        pool-wide median across targets, see median_agreement)."""
+        self.cluster_agree = np.asarray(agree, dtype=float)
+        self.comp, self.cluster_groups = clusters(self.cluster_agree, self.names, cluster_threshold)
+        self.watch = [(a, b, round(float(self.cluster_agree[i, j]), 3))
+                      for (i, a), (j, b) in itertools.combinations(enumerate(self.names), 2)
+                      if WATCH_BAND[0] < self.cluster_agree[i, j] <= WATCH_BAND[1]]
 
     @classmethod
     def from_price(cls, price, params, names, target, start='2018-01-01', **kw):
@@ -290,19 +351,40 @@ class Pool:
         return cls(names, np.vstack(raw), target, **kw)
 
 
+def median_agreement(pools):
+    """Element-wise median of the pairwise agreement matrices of the
+    per-target pools (same member order)."""
+    names = pools[0].names
+    assert all(p.names == names for p in pools), 'pools must have the same members in the same order'
+    return np.median(np.stack([p.agree for p in pools]), axis=0)
+
+
+def apply_pool_clusters(pools, cluster_threshold=CLUSTER_THRESHOLD):
+    """v2.1 cluster rule: one set of clusters for the whole pool, from the
+    median agreement across targets, applied to every per-target pool."""
+    med = median_agreement(pools)
+    for p in pools:
+        p.apply_clusters(med, cluster_threshold)
+    return med, pools[0].cluster_groups
+
+
+def loo_positions(R):
+    """Leave-one-out consensus positions for a (k, T) raw-signal matrix:
+    mean of the other k-1 members, then the hold rule (0 holds the previous
+    position; flat until the first non-zero score)."""
+    R = np.asarray(R, dtype=float)
+    k = len(R)
+    return hold_positions((R.sum(0)[None] - R) / (k - 1))
+
+
 def set_coherence(P, members, holds=HOLDS, weights=WEIGHTS, precision_veto=PRECISION_VETO,
-                  tie_break='full', detail=False):
+                  detail=False):
     """Score one set (names or indices into P.names) for every hold.
     Returns {hold: dict(C, mean_f1, mean_timing, A, min_precision, weakest,
     precision_veto, cluster_rule, excluded[, per_member])}."""
     idx = np.array(sorted(P.names.index(m) if isinstance(m, str) else int(m) for m in members))
     k = len(idx)
-    R = P.raw[idx]
-    total = R.sum(0)
-    loo = (total[None] - R) / (k - 1)
-    if tie_break == 'full':
-        loo = np.where(np.abs(loo) <= ATOL, total[None] / k, loo)
-    pos = hold_positions(loo)
+    pos = loo_positions(P.raw[idx])
     A = float(np.mean([P.agree[a, b] for a, b in itertools.combinations(idx, 2)]))
     cluster_hit = len(set(P.comp[idx])) < k
     out = {}
@@ -352,7 +434,8 @@ def differs_enough(candidate, earlier_sets=(SET1_BASELINE,), min_diff=3):
 
 
 def aggregate(ranked, ref=REF, earlier_sets=(SET1_BASELINE,)):
-    """One row per set, ordered by median rank, spread, IQR, then C at ref.
+    """One row per set, ordered by median rank, then C at ref (higher
+    first), then spread, then IQR.
     spread_passed / n_configs_passed describe the configs the set passed."""
     g = ranked.groupby('members')['rank']
     agg = pd.DataFrame({'median_rank': g.median(), 'min_rank': g.min(), 'max_rank': g.max(),
@@ -367,22 +450,26 @@ def aggregate(ranked, ref=REF, earlier_sets=(SET1_BASELINE,)):
               'cluster_rule', 'rank'):
         agg[c + tag] = r[c]
     agg['k'] = r['k']
-    agg = agg.reset_index().sort_values(['median_rank', 'spread', 'iqr', 'C' + tag],
-                                        ascending=[True, True, True, False]).reset_index(drop=True)
+    agg = agg.reset_index().sort_values(['median_rank', 'C' + tag, 'spread', 'iqr'],
+                                        ascending=[True, False, True, True],
+                                        na_position='last').reset_index(drop=True)
     agg['final_position'] = np.arange(1, len(agg) + 1)
     agg['differs_from_set1'] = agg.members.apply(lambda m: differs_enough(m, earlier_sets))
     return agg
 
 
 def rank_pool(price, pool, targets=TARGETS, holds=HOLDS, sizes=(5, 6, 7), start='2018-01-01',
-              space_override=None, knobs=None, **kw):
-    """Horizon-match per target, score every set in every config, rank and
-    aggregate. Returns (agg, ranked scores, horizon tables, params per target)."""
-    tables, params, scores = [], {}, []
+              space_override=None, knobs=None, cluster_threshold=CLUSTER_THRESHOLD, **kw):
+    """Horizon-match per target, apply the pool-wide (median) clusters,
+    score every set in every config, rank and aggregate.
+    Returns (agg, ranked scores, horizon tables, params per target, pools)."""
+    tables, params, pools, cache = [], {}, [], {}
     for t in targets:
-        tab, params[t] = horizon_match(price, pool, t, start, knobs=knobs, space_override=space_override)
+        tab, params[t] = horizon_match(price, pool, t, start, knobs=knobs, space_override=space_override,
+                                       cache=cache)
         tables.append(tab)
-        P = Pool.from_price(price, params[t], pool, t, start, holds=holds)
-        scores.append(score_all(P, sizes, holds=holds, **kw))
+        pools.append(Pool.from_price(price, params[t], pool, t, start, holds=holds))
+    apply_pool_clusters(pools, cluster_threshold)
+    scores = [score_all(P, sizes, holds=holds, **kw) for P in pools]
     ranked = rank_configs(pd.concat(scores, ignore_index=True))
-    return aggregate(ranked), ranked, pd.concat(tables, ignore_index=True), params
+    return aggregate(ranked), ranked, pd.concat(tables, ignore_index=True), params, pools
