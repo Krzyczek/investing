@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 from decimal import Decimal
 import indicators
 
@@ -216,6 +217,28 @@ def params_valid(params: dict, components=None) -> bool:
     return all(rule(params) for comp, rule in CONSTRAINTS if comp in selected)
 
 
+# Wynik TPI == 0 -> utrzymaj poprzednią pozycję (decyzja Krzyczka).
+ZERO_ATOL = 1e-12   # group averaging can leave float residue like 1e-17
+
+
+def position_from_score(score, mode: str = 'long_short') -> np.ndarray:
+    """TPI score -> position (signal at the close of each bar, before the
+    one-bar lag applied in the backtest).
+
+    score > 0 -> long (+1); score < 0 -> short (-1) in long_short, flat (0)
+    in long_only; score == 0 -> HOLD the previous position (no flip, no
+    exit). Same hold rule in both modes. If the first bars score 0 there is
+    no previous position, so it stays flat until the first non-zero score.
+    Uses only past bars (forward fill), so there is no lookahead."""
+    if mode not in ('long_only', 'long_short'):
+        raise ValueError(f"mode must be 'long_only' or 'long_short', got {mode!r}")
+    score = np.asarray(score, dtype=float)
+    zero = np.isnan(score) | np.isclose(score, 0.0, rtol=0.0, atol=ZERO_ATOL)
+    below = -1.0 if mode == 'long_short' else 0.0
+    raw = np.where(zero, np.nan, np.where(score > 0, 1.0, below))
+    return pd.Series(raw).ffill().fillna(0.0).to_numpy().astype(int)
+
+
 class tpi():
     def __init__(self, df):
         self.df = df
@@ -242,7 +265,6 @@ class tpi():
         score = np.mean(np.vstack(group_means), axis=0)
         self.tpi_score = score
 
-        if mode == 'long_short':
-            self.signal = np.where(score >= 0, 1, -1)
-        else:
-            self.signal = np.where(score > 0, 1, 0)
+        # Wynik 0 = trzymaj poprzednią pozycję (przedtem: long_short 0 -> long,
+        # long_only 0 -> flat); patrz position_from_score
+        self.signal = position_from_score(score, mode)
