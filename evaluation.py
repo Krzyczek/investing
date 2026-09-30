@@ -1,3 +1,19 @@
+"""DEPRECATED - do not use. Kept only as a record of the older robustness step.
+
+The working pipeline is evaluation_test.py (eval -> dedupe_fronts ->
+parameter_robustness_test -> holdout_report); final_selection.py uses it.
+The functions below are known to be broken against the current tpi.py: they
+read 'fast_ma_period' / 'slow_ma_period' (now 'fast_ma' / 'slow_ma' and
+scaled float params) and call the old positional calculate_tpi(...) signature.
+
+Importing this module no longer runs anything: the 5000-trial study that used
+to start at import time is gone.
+"""
+import warnings
+warnings.warn("evaluation.py is deprecated; use evaluation_test.py "
+              "(eval / parameter_robustness_test / holdout_report).",
+              DeprecationWarning, stacklevel=2)
+
 import optuna_testing
 import pandas as pd
 from optuna_testing import instrument_strategy as istr
@@ -145,5 +161,7 @@ def parameter_robustness_test(deposit : int,instrument,pareto_fronts,safe_invest
 
         
     
-pareto = eval(12000,'crypto',0)
-parameter_robustness_test(12000, 'crypto', pareto, 0)
+if __name__ == "__main__":
+    # dawniej: pareto = eval(12000,'crypto',0); parameter_robustness_test(12000, 'crypto', pareto, 0)
+    # (uruchamiane przy KAŻDYM imporcie modułu)
+    raise SystemExit("evaluation.py is deprecated - run evaluation_test.py instead.")
