@@ -466,6 +466,10 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
         print(f"Evaluating Front {layer_idx} containing {len(front)} candidates...")
         
         for i, trial in enumerate(front):
+            if not optuna_testing.is_feasible(trial):
+                # filtered-out trials ([-1000, 0]) are never robustness candidates
+                print(f"  Candidate {i+1}: SKIPPED (infeasible trial #{trial.number})")
+                continue
             base_params = tpi.params_from_trial(trial)
 
             colors_ok, overall_cov, report, final_params = \

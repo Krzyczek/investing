@@ -7,6 +7,37 @@ import pandas as pd
 import tpi
 import optuna
 
+# Wartości zwracane przez Optunę dla strategii odrzuconych przez filtry.
+# Od teraz takie próby są dodatkowo oznaczone jako NIEDOPUSZCZALNE przez
+# trial.set_constraint(...), więc nie trafiają do frontów Pareto ani do testu
+# odporności, a sampler NSGA-II nadal się na nich uczy (constrained domination).
+PENALTY_VALUES = [-1000, 0]
+MAX_CLOSE_DRAWDOWN = 0.60
+
+
+def record_constraints(trial, violations: dict):
+    """Store constraint violations on the trial (value > 0 == violated).
+    Optuna 5: trial.set_constraint is read by NSGAIISampler (constrained
+    domination) and by study.best_trials; the dict is also kept as a user
+    attr so it is visible in trials_dataframe()."""
+    for name, value in violations.items():
+        trial.set_constraint(name, float(value))
+    trial.set_user_attr('constraints', {k: float(v) for k, v in violations.items()})
+    trial.set_user_attr('feasible', all(v <= 0 for v in violations.values()))
+
+
+def is_feasible(trial) -> bool:
+    """True for a COMPLETE trial that satisfied every filter. Trials from
+    studies run before constraints were recorded are recognised by the
+    [-1000, 0] penalty values."""
+    if trial.state != optuna.trial.TrialState.COMPLETE:
+        return False
+    constraints = getattr(trial, 'constraints', None) or {}
+    if constraints:
+        return all(v <= 0 for v in constraints.values())
+    return not (trial.values is not None and list(trial.values) == PENALTY_VALUES)
+
+
 class instrument_strategy():
     def __init__(self, instrument: str, instrument_type: str, deposit: int,risk_free_rate:float = 0.03):
         """Instrument input is a string format for yfinance ticker (work in progress)
@@ -36,6 +67,7 @@ class instrument_strategy():
         # ten moduł.
         import evaluation_test
         evaluation_test.check_table(table)
+        red_below, _, green_to = evaluation_test.TRADE_COUNT_BANDS[table]
 
         def objective(trial):
             params = tpi.suggest_params(trial)
@@ -46,22 +78,39 @@ class instrument_strategy():
                                              self.risk_free_rate, 'long_short',
                                              self.benchmark_returns, params)
             if m is None:
-                return [-1000,0]   # strategy was liquidated on a short
+                # strategy was liquidated on a short
+                record_constraints(trial, {'num_trades': 0.0, 'liquidation': 1.0,
+                                           'max_drawdown': 1.0 - MAX_CLOSE_DRAWDOWN})
+                return PENALTY_VALUES
 
             num_trades = m['num_trades']      # non-flat position segments
             trial.set_user_attr('num_trades', num_trades)
-            # odrzucamy tylko CZERWONY zakres liczby transakcji z wybranej tabeli
-            if evaluation_test.classify_metric('num_trades', num_trades, table) == 'red':
-                return [-1000,0]
-
-            if m['close_max_dd'] > 0.60:   # reject strategies that lost >60% from peak
-                return [-1000,0]
+            # Naruszenia są stopniowane (0 = OK), żeby sampler wiedział, która
+            # odrzucona próba była "bliżej" dopuszczalnej:
+            #  - liczba transakcji: tylko CZERWONY zakres wybranej tabeli,
+            #    względna odległość od najbliższej granicy
+            #  - drawdown (close): nadwyżka ponad 60% od szczytu
+            if num_trades < red_below:
+                trades_violation = (red_below - num_trades) / red_below
+            elif num_trades > green_to:
+                trades_violation = (num_trades - green_to) / green_to
+            else:
+                trades_violation = 0.0
+            dd_violation = max(0.0, m['close_max_dd'] - MAX_CLOSE_DRAWDOWN)
+            record_constraints(trial, {'num_trades': trades_violation,
+                                       'liquidation': 0.0,
+                                       'max_drawdown': dd_violation})
+            if trades_violation > 0 or dd_violation > 0:
+                return PENALTY_VALUES   # reject (trade count red / lost >60% from peak)
 
             return round(m['sortino'], 4), round(m['calmar'], 4)
         
         if __name__ != "__main__":
             # Opcja 'maximize' mówi Optunie, że im większy wynik z return, tym lepiej
-            study = optuna.create_study(directions=['maximize','maximize'])
+            # NSGA-II jawnie: w Optunie 5 domyślnym samplerem jest TPE, a
+            # NSGA-II obsługuje ograniczenia (constrained domination)
+            study = optuna.create_study(directions=['maximize','maximize'],
+                                        sampler=optuna.samplers.NSGAIISampler())
             
             print("Rozpoczynam poszukiwanie najlepszych parametrów...")
             study.optimize(objective, n_trials=5000, n_jobs=-1) # n_jobs=-1 używa wszystkich rdzeni procesora!
@@ -100,7 +149,9 @@ class instrument_strategy():
                 return better_in_at_least_one
 
         
-        completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+        # tylko próby DOPUSZCZALNE: odrzucone przez filtry ([-1000, 0]) nie
+        # mogą tworzyć frontów Pareto
+        completed = [t for t in study.trials if is_feasible(t)]
 
         # --- deduplicate by params ---
         seen = set()
