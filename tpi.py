@@ -8,13 +8,18 @@ import indicators
 #  To add a new indicator to the TPI you edit ONLY this file:
 #    1. write a small signal function:  (df, params) -> array of +1/0/-1
 #    2. register it in COMPONENTS with its parameter search space
-#    3. (optional) add cross-parameter rules to CONSTRAINTS
+#    3. (optional) add cross-parameter rules to CONSTRAINTS, tagged with
+#       the component they belong to: ('component_name', rule)
 #
 #  Nothing in optuna_testing.py / evaluation.py / evaluation_test.py
 #  has to change: they discover parameters and constraints from here.
 #
 #  Param spec format:  name: (type, low, high, step)
 #     type is 'int' or 'float' (matches optuna suggest_int/suggest_float)
+#
+#  Every helper below takes an optional `components` list (default: all
+#  registered components), so a single indicator can be optimised and
+#  robustness-tested SOLO before it is combined with others.
 # =====================================================================
 
 
@@ -118,19 +123,36 @@ COMPONENTS = {
 # Cross-parameter validity rules. A trial whose params fail any rule
 # gets pruned by the optimizer (replaces the hardcoded
 # "if fast_ma_period >= slow_ma_period: raise TrialPruned()").
+# Each rule is tagged with its component, so it is only applied when that
+# component is part of the selected subset.
 CONSTRAINTS = [
-    lambda p: p['fast_ma'] < p['slow_ma'],
+    ('ema_cross', lambda p: p['fast_ma'] < p['slow_ma']),
 ]
 
 
 # ---------- generic machinery (never needs editing) ----------
 
-def params_from_trial(trial) -> dict:
+def resolve_components(components=None) -> list:
+    """Validate a component selection. None -> all registered components.
+    A single name may be passed as a string. Returned in registry order."""
+    if components is None:
+        return list(COMPONENTS)
+    if isinstance(components, str):
+        components = [components]
+    unknown = [c for c in components if c not in COMPONENTS]
+    if unknown:
+        raise KeyError(f"Unknown TPI component(s) {unknown}; registered: {list(COMPONENTS)}")
+    if not components:
+        raise ValueError("Component selection is empty.")
+    return [c for c in COMPONENTS if c in components]
+
+
+def params_from_trial(trial, components=None) -> dict:
     """Inverse of suggest_params: rebuild the runtime param dict from a
     (Frozen)Trial. suggest_params stores float params as int '<name>_scaled',
     so trial.params cannot be indexed with param_space() names directly."""
     out = {}
-    for name, (ptype, low, high, step) in param_space().items():
+    for name, (ptype, low, high, step) in param_space(components).items():
         if name in trial.params:
             out[name] = trial.params[name]
         elif f'{name}_scaled' in trial.params:
@@ -142,10 +164,12 @@ def params_from_trial(trial) -> dict:
             )
     return out
 
-def param_space() -> dict:
-    """Merged search space of every component, keyed by param name."""
+def param_space(components=None) -> dict:
+    """Merged search space of the selected components (default: all),
+    keyed by param name."""
     space = {}
-    for comp_name, comp in COMPONENTS.items():
+    for comp_name in resolve_components(components):
+        comp = COMPONENTS[comp_name]
         for name, spec in comp['params'].items():
             if name in space and space[name] != spec:
                 raise ValueError(
@@ -156,7 +180,7 @@ def param_space() -> dict:
     return space
 
 
-def suggest_params(trial) -> dict:
+def suggest_params(trial, components=None) -> dict:
     """Build the full parameter dict from an optuna trial.
     The objective function calls this instead of listing suggest_* lines.
 
@@ -164,7 +188,7 @@ def suggest_params(trial) -> dict:
     decimal increments (0.01, 0.1, etc.) instead of float precision drift.
     """
     params = {}
-    for name, (ptype, low, high, step) in param_space().items():
+    for name, (ptype, low, high, step) in param_space(components).items():
         if ptype == 'int':
             params[name] = trial.suggest_int(name, low, high, step=step)
         elif ptype == 'float':
@@ -183,23 +207,31 @@ def suggest_params(trial) -> dict:
     return params
 
 
-def params_valid(params: dict) -> bool:
-    """True when the parameter combination satisfies all CONSTRAINTS."""
-    return all(rule(params) for rule in CONSTRAINTS)
+def params_valid(params: dict, components=None) -> bool:
+    """True when the parameter combination satisfies all CONSTRAINTS of the
+    selected components (default: all)."""
+    selected = set(resolve_components(components))
+    return all(rule(params) for comp, rule in CONSTRAINTS if comp in selected)
 
 
 class tpi():
     def __init__(self, df):
         self.df = df
 
-    def calculate_tpi(self, params: dict, mode: str = 'long_only'):
+    def calculate_tpi(self, params: dict, mode: str = 'long_only', components=None):
         """Compute the TPI from a flat params dict (e.g. optuna trial.params).
 
         Aggregation preserves the original behaviour: signals are averaged
         inside each group, then the group means are averaged together.
+        `components` restricts the TPI to a subset (default: all); with a
+        single component or a single group the score is just that mean.
         """
+        if mode not in ('long_only', 'long_short'):
+            raise ValueError(f"mode must be 'long_only' or 'long_short', got {mode!r}")
+        self.components = resolve_components(components)
         groups = {}
-        for name, comp in COMPONENTS.items():
+        for name in self.components:
+            comp = COMPONENTS[name]
             sig = np.asarray(comp['signal'](self.df, params), dtype=float)
             setattr(self, f'{name}_signal', sig)   # kept for inspection
             groups.setdefault(comp.get('group', 'default'), []).append(sig)
