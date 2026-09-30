@@ -2,8 +2,6 @@ import buyhold_data
 import data_import
 import indicators
 import investment_metrics as im
-import plotly.subplots as ps
-import plotly.graph_objects as go
 import numpy as np
 import pandas as pd
 import tpi

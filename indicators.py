@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
-from statsmodels.tsa.stattools import adfuller
+# statsmodels jest potrzebny tylko dla calculate_rolling_adf_pvalues -> import leniwy
+# (lazy import inside that function), so the TPI works without statsmodels installed.
 
 
 class sma():
@@ -82,7 +83,8 @@ def calculate_rolling_adf_pvalues(price_series: pd.Series, window: int = 200) ->
     - price_series: Dane wejściowe (np. ceny zamknięcia BTC, ETH lub SOL)
     - window: Rozmiar okna (dla interwału 1D rekomendowane 180-250 dni)
     """
-    
+    from statsmodels.tsa.stattools import adfuller   # lazy: only this helper needs statsmodels
+
     # 1. Funkcja pomocnicza wyciągająca tylko p-value z pojedynczego okna
     def get_pvalue(window_data):
         try:
