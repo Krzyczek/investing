@@ -42,7 +42,7 @@ Helpers in `indicators.py` with **no signal and not a component** (reuse them, d
 
 ### On branches (not merged yet)
 
-Review status as of 30 Sep 2026, 12:10 BST, from the TA Validation Reviewer (`/workspace/ta/runs/reviewer/review_summary.md`). POOL-READY means built, reference-checked and reviewed, so the indicator may be used in set tests. Builder A's merge heads are tree-identical to the reviewed SHA merged onto `0ef1708`, so the verdict carries over to both.
+Review status as of 30 Sep 2026, 13:15 BST, from the TA Validation Reviewer (`/workspace/ta/runs/reviewer/review_summary.md`). POOL-READY means built, reference-checked and reviewed, so the indicator may be used in set tests. Builder A's merge heads are tree-identical to the reviewed SHA merged onto `0ef1708`, so the verdict carries over to both.
 
 | indicator | key | owner/branch | reviewed SHA | current head | review | log paths |
 |---|---|---|---|---|---|---|
@@ -52,16 +52,16 @@ Review status as of 30 Sep 2026, 12:10 BST, from the TA Validation Reviewer (`/w
 | ROC sign | `roc` | A / `ind-roc` | `eda4ccb` | `935f582` | POOL-READY | `/workspace/ta/runs/builder-a/` |
 | Hull MA slope | `hull` | A / `ind-hull` | `4152163` | `acf1bfe` | POOL-READY | `/workspace/ta/runs/builder-a/` |
 | TEMA vs price | `tema` | A / `ind-tema` | `f85895c` | `7e05eb2` | POOL-READY (range 5-452) | `/workspace/ta/runs/builder-a/` |
-| Vortex (VI+/VI-) | `vortex` | B / `ind-vortex` | `75398c2` | `75398c2` | POOL-READY | `/workspace/ta/runs/builder-b/vortex/` |
-| CCI | `cci` | B / `ind-cci` | `1f46c0e` | `1f46c0e` | POOL-READY | `/workspace/ta/runs/builder-b/cci/` |
-| KAMA | `kama` | B / `ind-kama` | `60b38a4` | `60b38a4` | POOL-READY | `/workspace/ta/runs/builder-b/kama/` |
-| MACD (histogram sign) | `macd` | B / `ind-macd` | `7ab2696` | `7ab2696` | POOL-READY (fast 2-74, slow 5-100) | `/workspace/ta/runs/builder-b/macd/` |
-| Bollinger bands | `bollinger` | B / `ind-bollinger` | `6534ea8` | `6534ea8` | POOL-READY | `/workspace/ta/runs/builder-b/bollinger/`. `ind-bollinger-dropped` is **dropped**; don't use it. |
-| OBV volume-trend | `obv` | A / `ind-obv` | - | `21159cf` | **FAILS check (4)**: trades above the band across obv_ema_length 5-150; all-zero volume votes 0 silently. Fix pending, not in pool | `/workspace/ta/runs/builder-a/` |
+| Vortex (VI+/VI-) | `vortex` | B / `ind-vortex` | `75398c2` | `3ace3df` (docs) | POOL-READY | `/workspace/ta/runs/builder-b/vortex/` |
+| CCI | `cci` | B / `ind-cci` | `1f46c0e` | `08f167a` (docs) | POOL-READY | `/workspace/ta/runs/builder-b/cci/` |
+| KAMA | `kama` | B / `ind-kama` | `60b38a4` | `e88b862` (docs) | POOL-READY | `/workspace/ta/runs/builder-b/kama/` |
+| MACD (histogram sign) | `macd` | B / `ind-macd` | `7ab2696` | `40060ae` (docs) | POOL-READY (fast 2-74, slow 5-100) | `/workspace/ta/runs/builder-b/macd/` |
+| Bollinger bands | `bollinger` | B / `ind-bollinger` | `6534ea8` | `91431a1` (docs) | POOL-READY | `/workspace/ta/runs/builder-b/bollinger/`. `ind-bollinger-dropped` is **dropped**; don't use it. |
+| OBV volume-trend | `obv` | A / `ind-obv` | `85c22a0` | `1541a3f` (in re-review) | POOL-READY at `85c22a0` on volume; **tuning search space changed 30 Sep**: obv_ema_length 5-150 → 5-510. Needs curated volume (data v2). The window-coverage fix at `1541a3f` is in review | `/workspace/ta/runs/builder-a/` |
 | Linear-regression slope t-stat | `linreg` | A / `ind-linreg` | `0992d7d` | `0992d7d` (decoder fix) | POOL-READY | `/workspace/ta/runs/builder-a/` |
-| Hurst / ADF regime gate | - | B / `ind-regime-gate` | `12a69fe` | `12a69fe` | POOL-READY (about ema_cross at loose gates) | `/workspace/ta/runs/builder-b/` |
-| Ehlers ITrend | - | B / `ind-ehlers-itrend` | `6f12cc3` | `6f12cc3` | POOL-READY (94-96% overlap with ema_cross; cluster rule applies) | `/workspace/ta/runs/builder-b/` |
-| Ichimoku | - | B / `ind-ichimoku` | `7fbea9c` | `7fbea9c` (rebased onto Donchian `5b3ced7`; `0841b35` dropped) | POOL-READY (`5b3ced7` is an ancestor, so merging `7fbea9c` brings the reviewed Donchian) | `/workspace/ta/runs/builder-b/` |
+| Hurst / ADF regime gate | - | B / `ind-regime-gate` | `12a69fe` | `bde8630` (docs) | POOL-READY (about ema_cross at loose gates) | `/workspace/ta/runs/builder-b/` |
+| Ehlers ITrend | - | B / `ind-ehlers-itrend` | `2a8f75a` | `2a8f75a` | POOL-READY (94-96% overlap with ema_cross; cluster rule applies). **Tuning search space changed 30 Sep**: itrend_alpha 0.01-0.50 step 0.01 → 0.005-0.50 step 0.005. Signals identical to `6f12cc3`. SOL is start-sensitive at alpha ≤0.02 (no mask, documented) | `/workspace/ta/runs/builder-b/` |
+| Ichimoku | - | B / `ind-ichimoku` | `7fbea9c` | `969c672` (docs; rebased onto Donchian `5b3ced7`; `0841b35` dropped) | POOL-READY (`5b3ced7` is an ancestor, so merging `7fbea9c` brings the reviewed Donchian) | `/workspace/ta/runs/builder-b/` |
 
 Parabolic SAR's widened range (on this branch at `0ef1708`) is also POOL-READY.
 
@@ -74,8 +74,10 @@ Widened minimally so that every trade-count target of the set-coherence horizon 
 | Parabolic SAR | `parabolic_sar_acceleration` | 0.01-0.1 step 0.01 | **0.0004-0.1 step 0.0001** | 0.0004→61 / 0.001→71 / 0.0013→81 | this branch (`tpi.py`). Start 0.0-1.0 and max 0.1-1.0 are unchanged, and `start <= maximum` is kept (`tests/test_psar_search_space.py`) |
 | TEMA | `tema_length` | 5-150 | **5-452** | 452→60 / 399→70 / 252→79-81 | `ind-tema` (builder A, reviewed `f85895c`, head `7e05eb2`; agrees) |
 | MACD | `macd_fast` | 2-50 | **2-74** (slow 5-100, signal 2-50 unchanged, `fast < slow` kept) | 74/100→61 / 50/100→71 / 50/51→79 | `ind-macd` (builder B, `7ab2696`, reviewed; aligned. The earlier 2-61 / 5-200 proposal is superseded) |
+| Ehlers ITrend | `itrend_alpha` | 0.01-0.50 step 0.01 | **0.005-0.50 step 0.005** | finer low-alpha grid (not a horizon widening); BTC 0.005→54 / 0.01→52 / 0.015→98 | `ind-ehlers-itrend` (builder B, `2a8f75a`, reviewed) |
+| OBV | `obv_ema_length` | 5-150 | **5-510** | 510→59 / 369→71 / 342→81 | `ind-obv` (builder A, `85c22a0` reviewed; `1541a3f` in re-review) |
 
-Any set run that contains `parabolic_sar`, `tema` or `macd` must log "tuning search space changed 30 Sep" together with the old and new ranges above.
+Any set run that contains `parabolic_sar`, `tema`, `macd`, `ehlers_itrend` or `obv` must log "tuning search space changed 30 Sep" together with the old and new ranges above.
 
 ## Set coherence v2 (`set_coherence.py`, approved by Krzyczek 30 Sep)
 
