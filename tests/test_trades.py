@@ -31,15 +31,24 @@ def test_run_backtest_trade_count_matches_segments(price):
         assert m['num_trades'] == len(segments) == et.count_trades(pos)
 
 
-def _run_study_with_fake_backtest(monkeypatch, data_dir, table, num_trades, close_dd=0.3):
+# every table metric yellow (no red) -> feasible unless something is overridden
+YELLOW = {'max_dd': 0.3, 'sortino': 2.0, 'sharpe': 1.0, 'profit_factor': 2.0,
+          'pct_profitable': 0.4, 'num_trades': 60, 'omega': 1.2,
+          'calmar': 0.5, 'alpha': 0.0, 'close_max_dd': 0.3}
+
+
+def _run_fake_study(monkeypatch, data_dir, table='main', n_trials=3, **override):
     def fake_backtest(*args, **kwargs):
-        return {'max_dd': 0.3, 'sortino': 1.0, 'sharpe': 1.0, 'profit_factor': 2.0,
-                'pct_profitable': 0.4, 'num_trades': num_trades, 'omega': 1.2,
-                'calmar': 0.5, 'alpha': 0.0, 'close_max_dd': close_dd}
+        return {**YELLOW, **override}
     monkeypatch.setattr(et, 'run_backtest', fake_backtest)
     s = ot.instrument_strategy('SYN-USD', 'crypto', 10000, 0.0, data_dir=data_dir)
-    study = s.strategy_evaluation(table=table, components=['supertrend'], n_trials=3,
-                                  n_jobs=1, seed=0)
+    return s.strategy_evaluation(table=table, components=['supertrend'], n_trials=n_trials,
+                                 n_jobs=1, seed=0)
+
+
+def _run_study_with_fake_backtest(monkeypatch, data_dir, table, num_trades, close_dd=0.3):
+    study = _run_fake_study(monkeypatch, data_dir, table, num_trades=num_trades,
+                            close_max_dd=close_dd)
     return [ot.is_feasible(t) for t in study.trials]
 
 
@@ -62,3 +71,44 @@ def test_optuna_filter_rejects_only_red_band(monkeypatch, data_dir, table, n, fe
 def test_optuna_drawdown_rule_still_applies(monkeypatch, data_dir):
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     assert _run_study_with_fake_backtest(monkeypatch, data_dir, 'main', 60, close_dd=0.61) == [False] * 3
+
+
+def test_all_yellow_is_feasible(monkeypatch, data_dir):
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study = _run_fake_study(monkeypatch, data_dir)
+    assert all(ot.is_feasible(t) for t in study.trials)
+    assert all(t.values == [2.0, 0.5] for t in study.trials)
+
+
+@pytest.mark.parametrize('metric,value', [
+    ('max_dd', 0.41), ('sortino', 1.99), ('sharpe', 0.99), ('profit_factor', 1.99),
+    ('pct_profitable', 0.34), ('omega', 1.09), ('num_trades', 106),
+])
+@pytest.mark.parametrize('table', ['main', 'alt'])
+def test_any_red_metric_makes_trial_infeasible(monkeypatch, data_dir, metric, value, table):
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study = _run_fake_study(monkeypatch, data_dir, table, **{metric: value})
+    for t in study.trials:
+        assert not ot.is_feasible(t)
+        assert t.values == ot.PENALTY_VALUES
+        red = {k for k, v in t.constraints.items() if v > 0}
+        assert red == {f'red_{metric}'}           # only that metric is violated
+        assert t.user_attrs['colors'][metric] == 'red'
+    fronts = ot.instrument_strategy.get_all_pareto_fronts(None, study)
+    assert fronts == []
+
+
+def test_red_violation_is_graded(monkeypatch, data_dir):
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    near = _run_fake_study(monkeypatch, data_dir, sortino=1.9).trials[0].constraints['red_sortino']
+    far = _run_fake_study(monkeypatch, data_dir, sortino=0.5).trials[0].constraints['red_sortino']
+    assert near == pytest.approx(0.05) and far == pytest.approx(0.75)
+
+
+def test_liquidated_trial_violates_everything(monkeypatch, data_dir):
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    monkeypatch.setattr(et, 'run_backtest', lambda *a, **k: None)
+    s = ot.instrument_strategy('SYN-USD', 'crypto', 10000, 0.0, data_dir=data_dir)
+    t = s.strategy_evaluation(components=['supertrend'], n_trials=1, n_jobs=1, seed=0).trials[0]
+    assert t.constraints['liquidation'] == 1.0
+    assert all(t.constraints[f'red_{m}'] == 1.0 for m in et.TABLE_METRICS)

@@ -8,6 +8,8 @@ import tpi
 import optuna
 
 # Wartości zwracane przez Optunę dla strategii odrzuconych przez filtry.
+# Filtry: likwidacja, drawdown (close) > 60% oraz KAŻDA czerwona metryka
+# wybranej tabeli kolorów (main/alt), w tym liczba transakcji.
 # Od teraz takie próby są dodatkowo oznaczone jako NIEDOPUSZCZALNE przez
 # trial.set_constraint(...), więc nie trafiają do frontów Pareto ani do testu
 # odporności, a sampler NSGA-II nadal się na nich uczy (constrained domination).
@@ -81,7 +83,8 @@ class instrument_strategy():
                             in_sample_end: str = None):
         """Run the multi-objective (Sortino, Calmar) Optuna search.
 
-        table      - Cobra table whose RED trade-count band is rejected ('main'|'alt')
+        table      - Cobra table ('main'|'alt'): a trial with ANY red metric on
+                     it is infeasible (graded constraint per metric)
         mode       - 'long_short' (default, as before) or 'long_only'
         components - TPI components to optimise (default: all registered)
         n_trials / n_jobs - Optuna budget; n_jobs=-1 uses all cores (threads)
@@ -115,7 +118,6 @@ class instrument_strategy():
         # ten moduł.
         import evaluation_test
         evaluation_test.check_table(table)
-        red_below, _, green_to = evaluation_test.TRADE_COUNT_BANDS[table]
 
         def objective(trial):
             params = tpi.suggest_params(trial, components)
@@ -129,30 +131,31 @@ class instrument_strategy():
                                              components=components, start=start,
                                              end=in_sample_end)
             if m is None:
-                # strategy was liquidated on a short
-                record_constraints(trial, {'num_trades': 0.0, 'liquidation': 1.0,
-                                           'max_drawdown': 1.0 - MAX_CLOSE_DRAWDOWN})
+                # strategy was liquidated on a short: metryki nieznane ->
+                # każda metryka tabeli liczona jako czerwona (1.0)
+                record_constraints(trial, {'liquidation': 1.0,
+                                           'max_drawdown': 1.0 - MAX_CLOSE_DRAWDOWN,
+                                           **{f'red_{k}': 1.0
+                                              for k in evaluation_test.TABLE_METRICS}})
                 return PENALTY_VALUES
 
             num_trades = m['num_trades']      # non-flat position segments
             trial.set_user_attr('num_trades', num_trades)
             # Naruszenia są stopniowane (0 = OK), żeby sampler wiedział, która
             # odrzucona próba była "bliżej" dopuszczalnej:
-            #  - liczba transakcji: tylko CZERWONY zakres wybranej tabeli,
-            #    względna odległość od najbliższej granicy
+            #  - KAŻDA czerwona metryka wybranej tabeli (main/alt), w tym
+            #    liczba transakcji: względna odległość od granicy czerwieni
+            #    (evaluation_test.red_violations)
             #  - drawdown (close): nadwyżka ponad 60% od szczytu
-            if num_trades < red_below:
-                trades_violation = (red_below - num_trades) / red_below
-            elif num_trades > green_to:
-                trades_violation = (num_trades - green_to) / green_to
-            else:
-                trades_violation = 0.0
-            dd_violation = max(0.0, m['close_max_dd'] - MAX_CLOSE_DRAWDOWN)
-            record_constraints(trial, {'num_trades': trades_violation,
-                                       'liquidation': 0.0,
-                                       'max_drawdown': dd_violation})
-            if trades_violation > 0 or dd_violation > 0:
-                return PENALTY_VALUES   # reject (trade count red / lost >60% from peak)
+            violations = {'liquidation': 0.0,
+                          'max_drawdown': max(0.0, m['close_max_dd'] - MAX_CLOSE_DRAWDOWN)}
+            violations.update({f'red_{k}': v for k, v in
+                               evaluation_test.red_violations(m, table).items()})
+            record_constraints(trial, violations)
+            trial.set_user_attr('colors', {k: evaluation_test.classify_metric(k, m[k], table)
+                                           for k in evaluation_test.TABLE_METRICS})
+            if any(v > 0 for v in violations.values()):
+                return PENALTY_VALUES   # reject (red metric / lost >60% from peak)
 
             return round(m['sortino'], 4), round(m['calmar'], 4)
         

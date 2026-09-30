@@ -113,6 +113,45 @@ def classify_metric(name, value, table='main'):
     raise ValueError(f"Unknown metric {name}")
 
 
+# Granice czerwonego zakresu (poza num_trades): metric -> (kierunek, próg)
+#   'above': red when value > threshold, 'below': red when value < threshold
+RED_THRESHOLDS = {'max_dd':         ('above', 0.40),
+                  'sortino':        ('below', 2.0),
+                  'sharpe':         ('below', 1.0),
+                  'profit_factor':  ('below', 2.0),
+                  'pct_profitable': ('below', 0.35),
+                  'omega':          ('below', 1.1)}
+
+
+def red_violations(metrics, table='main'):
+    """Graded 'how red' of each of the 7 table metrics (0.0 = not red).
+
+    > 0 exactly when classify_metric(...) == 'red'. The size is the relative
+    distance past the red boundary (e.g. Sortino 1.5 -> (2 - 1.5) / 2 = 0.25),
+    so an optimizer can tell 'almost yellow' from 'far off'. Non-finite values
+    that classify as red get 1.0. Used as Optuna constraints."""
+    check_table(table)
+    out = {}
+    for name in TABLE_METRICS:
+        value = metrics[name]
+        if classify_metric(name, value, table) != 'red':
+            out[name] = 0.0
+            continue
+        if not np.isfinite(value):
+            out[name] = 1.0
+            continue
+        if name == 'num_trades':
+            red_below, _, green_to = TRADE_COUNT_BANDS[table]
+            out[name] = ((red_below - value) / red_below if value < red_below
+                         else (value - green_to) / green_to)
+        else:
+            direction, threshold = RED_THRESHOLDS[name]
+            out[name] = ((value - threshold) if direction == 'above'
+                         else (threshold - value)) / threshold
+        out[name] = float(out[name])
+    return out
+
+
 def column_verdict(metrics, table='main'):
     """Apply the guide's per-column rule: >=5/7 green and NO red."""
     colors = {m: classify_metric(m, metrics[m], table) for m in TABLE_METRICS}

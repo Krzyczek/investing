@@ -59,3 +59,39 @@ def test_column_verdict_uses_table():
     assert et.column_verdict(m, 'main')[0] is True
     ok, greens, reds, colors = et.column_verdict(m, 'alt')
     assert ok is False and reds == 1 and colors['num_trades'] == 'red'
+
+
+VALUES = {
+    'max_dd': [0.0, 0.2499, 0.25, 0.40, 0.4001, 0.9, np.nan],
+    'sortino': [-3.0, 1.999, 2.0, 2.9, 2.9001, np.inf, np.nan],
+    'sharpe': [-1.0, 0.999, 1.0, 2.0, 2.001, np.nan],
+    'profit_factor': [0.0, 1.99, 2.0, 4.0, 4.01, np.inf, np.nan],
+    'pct_profitable': [0.0, 0.3499, 0.35, 0.50, 0.5001],
+    'num_trades': [0, 29, 30, 34, 35, 39, 40, 44, 45, 95, 96, 105, 106, 300],
+    'omega': [0.5, 1.0999, 1.1, 1.31, 1.3101, np.nan],
+}
+
+
+@pytest.mark.parametrize('table', ['main', 'alt'])
+@pytest.mark.parametrize('name', list(VALUES))
+def test_red_violations_positive_exactly_when_red(table, name):
+    base = {'max_dd': 0.1, 'sortino': 3.5, 'sharpe': 2.5, 'profit_factor': 5,
+            'pct_profitable': 0.6, 'num_trades': 60, 'omega': 1.5}
+    assert all(v == 0 for v in et.red_violations(base, table).values())
+    for value in VALUES[name]:
+        v = et.red_violations({**base, name: value}, table)
+        is_red = et.classify_metric(name, value, table) == 'red'
+        assert (v[name] > 0) == is_red, (name, value, table, v[name])
+        assert np.isfinite(v[name])
+        assert all(v[k] == 0 for k in v if k != name)
+
+
+def test_red_violation_grades():
+    base = {'max_dd': 0.1, 'sortino': 3.5, 'sharpe': 2.5, 'profit_factor': 5,
+            'pct_profitable': 0.6, 'num_trades': 60, 'omega': 1.5}
+    g = lambda **kw: et.red_violations({**base, **kw})
+    assert g(max_dd=0.5)['max_dd'] == pytest.approx(0.25)
+    assert g(sortino=1.5)['sortino'] == pytest.approx(0.25)
+    assert g(num_trades=30)['num_trades'] == pytest.approx(0.25)
+    assert g(num_trades=126)['num_trades'] == pytest.approx(0.2)
+    assert et.red_violations({**base, 'num_trades': 96}, 'alt')['num_trades'] == pytest.approx(1 / 95)

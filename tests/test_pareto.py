@@ -47,15 +47,24 @@ def test_all_infeasible_gives_no_fronts():
     assert ot.instrument_strategy.get_all_pareto_fronts(None, study) == []
 
 
+SEED_WITH_BOTH = 0   # synthetic series on which this 40-trial study has feasible AND infeasible trials
+CONSTRAINT_KEYS = {'liquidation', 'max_drawdown', 'red_max_dd', 'red_sortino', 'red_sharpe',
+                   'red_profit_factor', 'red_pct_profitable', 'red_num_trades', 'red_omega'}
+
+
 def test_real_study_fronts_and_robustness_skip_infeasible(tmp_path, capsys):
     optuna.logging.set_verbosity(optuna.logging.WARNING)
-    make_price(n=3000).drop(columns='return').to_csv(tmp_path / 'SYN-USD.csv')
+    make_price(n=3000, seed=SEED_WITH_BOTH).drop(columns='return').to_csv(tmp_path / 'SYN-USD.csv')
     data_dir = str(tmp_path)
     s = ot.instrument_strategy('SYN-USD', 'crypto', 10000, 0.0, data_dir=data_dir)
     study = s.strategy_evaluation(mode='long_only', components=['supertrend'],
                                   n_trials=40, n_jobs=1, seed=1)
     completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
-    assert all(set(t.constraints) == {'num_trades', 'liquidation', 'max_drawdown'} for t in completed)
+    assert all(set(t.constraints) == CONSTRAINT_KEYS for t in completed)
+    # every feasible trial has no red metric on the main table
+    for t in completed:
+        if ot.is_feasible(t):
+            assert 'red' not in t.user_attrs['colors'].values()
     bad = [t for t in completed if not ot.is_feasible(t)]
     good = [t for t in completed if ot.is_feasible(t)]
     assert bad and good          # this seed produces both kinds
