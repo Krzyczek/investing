@@ -42,7 +42,7 @@ Helpers in `indicators.py` with **no signal and not a component** (reuse them, d
 
 ### On branches (not merged yet)
 
-Review status as of 30 Sep 2026, 11:44 BST, from the TA Validation Reviewer (`/workspace/ta/runs/reviewer/review_summary.md`). POOL-READY means built, reference-checked and reviewed, so the indicator may be used in set tests. Builder A's merge heads are tree-identical to the reviewed SHA merged onto `0ef1708`, so the verdict carries over to both.
+Review status as of 30 Sep 2026, 12:01 BST, from the TA Validation Reviewer (`/workspace/ta/runs/reviewer/review_summary.md`). POOL-READY means built, reference-checked and reviewed, so the indicator may be used in set tests. Builder A's merge heads are tree-identical to the reviewed SHA merged onto `0ef1708`, so the verdict carries over to both.
 
 | indicator | key | owner/branch | reviewed SHA | current head | review | log paths |
 |---|---|---|---|---|---|---|
@@ -57,11 +57,11 @@ Review status as of 30 Sep 2026, 11:44 BST, from the TA Validation Reviewer (`/w
 | KAMA | `kama` | B / `ind-kama` | `60b38a4` | `60b38a4` | POOL-READY | `/workspace/ta/runs/builder-b/kama/` |
 | MACD (histogram sign) | `macd` | B / `ind-macd` | `7ab2696` | `7ab2696` | POOL-READY (fast 2-74, slow 5-100) | `/workspace/ta/runs/builder-b/macd/` |
 | Bollinger bands | `bollinger` | B / `ind-bollinger` | `6534ea8` | `6534ea8` | POOL-READY | `/workspace/ta/runs/builder-b/bollinger/`. `ind-bollinger-dropped` is **dropped**; don't use it. |
-| OBV volume-trend | `obv` | A / `ind-obv` | - | `21159cf` | in review | `/workspace/ta/runs/builder-a/` |
-| Linear-regression slope t-stat | `linreg` | A / `ind-linreg` | - | `0992d7d` (decoder fix) | in review | `/workspace/ta/runs/builder-a/` |
-| Hurst / ADF regime gate | - | B / `ind-regime-gate` | - | `12a69fe` | in review | `/workspace/ta/runs/builder-b/` |
-| Ehlers ITrend | - | B / `ind-ehlers-itrend` | - | `6f12cc3` | in review | `/workspace/ta/runs/builder-b/` |
-| Ichimoku | - | B / `ind-ichimoku` | - | `46497c0` (drop `0841b35` at integration) | in review | `/workspace/ta/runs/builder-b/` |
+| OBV volume-trend | `obv` | A / `ind-obv` | - | `21159cf` | **FAILS check (4)**: trades above the band across obv_ema_length 5-150; all-zero volume votes 0 silently. Fix pending, not in pool | `/workspace/ta/runs/builder-a/` |
+| Linear-regression slope t-stat | `linreg` | A / `ind-linreg` | `0992d7d` | `0992d7d` (decoder fix) | POOL-READY | `/workspace/ta/runs/builder-a/` |
+| Hurst / ADF regime gate | - | B / `ind-regime-gate` | `12a69fe` | `12a69fe` | POOL-READY (about ema_cross at loose gates) | `/workspace/ta/runs/builder-b/` |
+| Ehlers ITrend | - | B / `ind-ehlers-itrend` | `6f12cc3` | `6f12cc3` | POOL-READY (94-96% overlap with ema_cross; cluster rule applies) | `/workspace/ta/runs/builder-b/` |
+| Ichimoku | - | B / `ind-ichimoku` | `46497c0` | `46497c0` (drop `0841b35`) | POOL-READY **only if merged after Donchian `5b3ced7`** (alone, it lands the old unreviewed Donchian) | `/workspace/ta/runs/builder-b/` |
 
 Parabolic SAR's widened range (on this branch at `0ef1708`) is also POOL-READY.
 
