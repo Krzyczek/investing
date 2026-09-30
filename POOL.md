@@ -23,17 +23,17 @@ TPI score exactly 0 = **hold the previous position** (no flip, no exit), in both
 
 ## Registry
 
-"solo result" = feasible trials / robust candidates, colour table, framework SHA the run used. BTC-USD daily, 300 trials, seed 42, in-sample 2018-01-01 to 2025-03-31, `long_short` unless noted. **All solo results so far are pre-hold-rule, have 0 feasible trials, and are information only.**
+"solo result" = feasible trials / robust candidates, colour table, framework SHA the run used. BTC-USD daily, 300 trials, seed 42, in-sample 2018-01-01 to 2025-03-31, `long_short` unless noted. **All solo results so far have 0 feasible trials and are information only.** The branch indicators' solo runs are all pre-hold-rule; `ema_cross` and `supertrend` were rerun on `9ee57cd` (hold rule) with the same result, 0 feasible.
 
 ### In `main`
 
 | indicator | component key | status tier | owner/branch | solo result | review | log paths |
 |---|---|---|---|---|---|---|
-| SMA + EMA (EMA cross) | `ema_cross` (uses `indicators.sma`, `indicators.ema`) | solo run documented | main (original) | 0 feasible / 0 robust, main, `a5fbf73` (pre-hold-rule) | reference check not done | `/workspace/ta/work/runs/solo_ema_cross_long_short.log` (+ `.json`, `_trials.csv`; `long_only` diagnostic alongside) |
+| SMA + EMA (EMA cross) | `ema_cross` (uses `indicators.sma`, `indicators.ema`) | solo run documented | main (original) | 0 feasible / 0 robust, main, `9ee57cd` (hold rule; also 0 / 0 on `a5fbf73`, pre-hold-rule) | reference check not done | `/workspace/ta/work/runs/solo_ema_cross_long_short.log` (+ `.json`, `_trials.csv`; `long_only` diagnostic alongside) |
 | ADX (directional: +DI vs -DI above threshold) | `adx` | built | main (directional since PR #1) | no solo run yet (joint runs only) | reference check not done | - |
 | Aroon oscillator | `aroon` | built | main (original) | no solo run yet (joint runs only) | reference check not done | - |
 | Parabolic SAR | `parabolic_sar` | built | main (original) | no solo run yet (joint runs only) | reference check not done | - |
-| Supertrend | `supertrend` | solo run documented | main (original) | 0 feasible / 0 robust, main, `a5fbf73` (pre-hold-rule) | reference check not done | `/workspace/ta/work/runs/solo_supertrend_long_short.log` (+ `.json`, `_trials.csv`) |
+| Supertrend | `supertrend` | solo run documented | main (original) | 0 feasible / 0 robust, main, `9ee57cd` (hold rule; also 0 / 0 on `a5fbf73`, pre-hold-rule) | reference check not done | `/workspace/ta/work/runs/solo_supertrend_long_short.log` (+ `.json`, `_trials.csv`) |
 
 Helpers in `indicators.py` with **no signal / not a component** (reuse them, don't rebuild):
 
