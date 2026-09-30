@@ -59,9 +59,9 @@ Review status as of 30 Sep 2026, 11:44 BST, from the TA Validation Reviewer (`/w
 | Bollinger bands | `bollinger` | B / `ind-bollinger` | `6534ea8` | `6534ea8` | POOL-READY | `/workspace/ta/runs/builder-b/bollinger/`. `ind-bollinger-dropped` is **dropped**; don't use it. |
 | OBV volume-trend | `obv` | A / `ind-obv` | - | `21159cf` | in review | `/workspace/ta/runs/builder-a/` |
 | Linear-regression slope t-stat | `linreg` | A / `ind-linreg` | - | `0992d7d` (decoder fix) | in review | `/workspace/ta/runs/builder-a/` |
-| Hurst / ADF regime gate | `regime_gate` | B / `ind-regime-gate` | - | `12a69fe` | in review | `/workspace/ta/runs/builder-b/` |
-| Ehlers ITrend | `ehlers_itrend` | B / `ind-ehlers` | - | `6f12cc3` | in review | `/workspace/ta/runs/builder-b/` |
-| Ichimoku | `ichimoku` | B / `ind-ichimoku` | - | `46497c0` (drop `0841b35` at integration) | in review | `/workspace/ta/runs/builder-b/` |
+| Hurst / ADF regime gate | - | B / `ind-regime-gate` | - | `12a69fe` | in review | `/workspace/ta/runs/builder-b/` |
+| Ehlers ITrend | - | B / `ind-ehlers-itrend` | - | `6f12cc3` | in review | `/workspace/ta/runs/builder-b/` |
+| Ichimoku | - | B / `ind-ichimoku` | - | `46497c0` (drop `0841b35` at integration) | in review | `/workspace/ta/runs/builder-b/` |
 
 Parabolic SAR's widened range (on this branch at `0ef1708`) is also POOL-READY.
 
