@@ -40,10 +40,18 @@ def _parabolic_sar_signal(df, p):
 
 
 def _adx_signal(df, p):
+    # ADX mierzy SIŁĘ trendu, a kierunek daje +DI vs -DI:
+    #   +1  gdy ADX > threshold i +DI > -DI  (silny trend wzrostowy)
+    #   -1  gdy ADX > threshold i -DI > +DI  (silny trend spadkowy)
+    #    0  w pozostałych przypadkach (słaby trend, remis DI, rozgrzewka/NaN)
     a = indicators.adx(df, p['adx_period'])
     a.calculate()
     t = p['threshold']
-    return np.where(a.adx_values > t, 1, np.where(a.adx_values < t, -1, 0))
+    strong = (a.adx_values > t).to_numpy()
+    plus_di = a.plus_di.to_numpy()
+    minus_di = a.minus_di.to_numpy()
+    return np.where(strong & (plus_di > minus_di), 1,
+                    np.where(strong & (minus_di > plus_di), -1, 0))
 
 
 def _aroon_signal(df, p):

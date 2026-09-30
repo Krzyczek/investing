@@ -180,6 +180,9 @@ class adx():
         # krok 3: +DI, -DI
         plus_di = 100 * (smoothed_plus_dm / smoothed_tr)
         minus_di = 100 * (smoothed_minus_dm / smoothed_tr)
+        # kierunek trendu (+DI vs -DI) udostępniony dla sygnału TPI
+        self.plus_di = plus_di
+        self.minus_di = minus_di
 
         # krok 4: DX
         dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
