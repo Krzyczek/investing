@@ -42,20 +42,21 @@ Helpers in `indicators.py` with **no signal and not a component** (reuse them, d
 
 ### On branches (not merged yet)
 
+All of these are built and reference-checked. None is reviewed yet, so none may be used in official set tests until review.
+
 | indicator | key | owner/branch | built | reference check | review | log paths |
 |---|---|---|---|---|---|---|
-| Donchian channel | `donchian` | A / `ind-donchian` | yes | on branch (`03baffd`: loop, TA-Lib, ta) | pending | `/workspace/ta/runs/builder-a/` |
-| Keltner channel | `keltner` | A / `ind-keltner` | yes | on branch (`4bd4558`: loop, ta, TA-Lib) | pending | `/workspace/ta/runs/builder-a/` |
-| RSI vs 50 | `rsi50` | A / `ind-rsi50` | yes | on branch (`acd720c`: loop, TA-Lib, pandas_ta, ta) | pending | - |
-| ROC sign | `roc` | A / `ind-roc` | yes | on branch (`3b3ef93`: loop, TA-Lib, ta, pandas_ta) | pending | - |
-| Hull MA slope | `hull` | A / `ind-hull` | yes | on branch (`125efc4`: loop, TA-Lib WMA, pandas_ta) | pending | - |
-| TEMA vs price | `tema` | A / `ind-tema` | yes | on branch (`a986c61`: loop, TA-Lib, pandas_ta) | pending | - |
-| Vortex (VI+/VI-) | `vortex` | B / `ind-vortex` | yes | `reference_check.log` | pending | `/workspace/ta/runs/builder-b/vortex/` |
-| CCI | `cci` | B / `ind-cci` | yes (on branch) | `reference_check.log` | pending | `/workspace/ta/runs/builder-b/cci/` |
-| KAMA | `kama` | B / `ind-kama` | yes (on branch) | `reference_check.log` | pending | `/workspace/ta/runs/builder-b/kama/` |
-| MACD (histogram sign) | `macd` | B / `ind-macd` | yes (on branch) | `reference_check.log` | pending | `/workspace/ta/runs/builder-b/macd/` |
-| Ichimoku | - | B / `ind-ichimoku` | in progress | reference-check script present | - | `/workspace/ta/runs/builder-b/ichimoku/` |
-| Bollinger bands | - | B / `ind-bollinger` | in rework (on top of `standard_deviation_bands`) | - | - | `/workspace/ta/runs/builder-b/bollinger/`. The old Bollinger branch is **superseded**; don't use it. |
+| Donchian channel | `donchian` | A / `ind-donchian` @ `72e22b3` | yes | yes (`03baffd`: loop, TA-Lib, ta) | pending | `/workspace/ta/runs/builder-a/` |
+| Keltner channel | `keltner` | A / `ind-keltner` @ `f2c7936` | yes | yes (`4bd4558`: loop, ta, TA-Lib) | pending | `/workspace/ta/runs/builder-a/` |
+| RSI vs 50 | `rsi50` | A / `ind-rsi50` @ `6d6e046` | yes | yes (`acd720c`: loop, TA-Lib, pandas_ta, ta) | pending | - |
+| ROC sign | `roc` | A / `ind-roc` @ `75a3705` | yes | yes (`3b3ef93`: loop, TA-Lib, ta, pandas_ta) | pending | - |
+| Hull MA slope | `hull` | A / `ind-hull` @ `88fe6ac` | yes | yes (`125efc4`: loop, TA-Lib WMA, pandas_ta) | pending | - |
+| TEMA vs price | `tema` | A / `ind-tema` @ `d041e6c` | yes | yes (`a986c61`: loop, TA-Lib, pandas_ta) | pending | - |
+| Vortex (VI+/VI-) | `vortex` | B / `ind-vortex` @ `2b6ae3c` | yes | yes (`reference_check.log`) | pending | `/workspace/ta/runs/builder-b/vortex/` |
+| CCI | `cci` | B / `ind-cci` @ `af0cba5` | yes | yes (`reference_check.log`) | pending | `/workspace/ta/runs/builder-b/cci/` |
+| KAMA | `kama` | B / `ind-kama` @ `992f79c` | yes | yes (`reference_check.log`) | pending | `/workspace/ta/runs/builder-b/kama/` |
+| MACD (histogram sign) | `macd` | B / `ind-macd` @ `e0e6f6e` | yes | yes (`reference_check.log`) | pending | `/workspace/ta/runs/builder-b/macd/` |
+| Bollinger bands | `bollinger` | B / `ind-bollinger` @ `5f928bc` | yes, reworked on an extended `standard_deviation_bands` (sma basis + multiplier) | yes (`reference_check.log`) | pending | `/workspace/ta/runs/builder-b/bollinger/`. The earlier version is `ind-bollinger-dropped` (`/workspace/ta/runs/builder-b/bollinger-dropped/`); it is **dropped**, don't use it. |
 
 ### Queued (not built yet)
 
@@ -65,6 +66,7 @@ Helpers in `indicators.py` with **no signal and not a component** (reuse them, d
 | Linear-regression slope t-stat | A |
 | Hurst / ADF regime gate (reuse `get_hurst_series`, `calculate_rolling_adf_pvalues`) | B |
 | Ehlers ITrend | B |
+| Ichimoku (will reuse the Donchian helper) | B |
 
 ## Note on earlier solo results
 
