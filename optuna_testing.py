@@ -77,7 +77,8 @@ class instrument_strategy():
 
     def strategy_evaluation(self, table: str = 'main', mode: str = 'long_short',
                             components=None, n_trials: int = 5000, n_jobs: int = -1,
-                            seed: int = None, start: str = '2018-01-01', sampler=None):
+                            seed: int = None, start: str = '2018-01-01', sampler=None,
+                            in_sample_end: str = None):
         """Run the multi-objective (Sortino, Calmar) Optuna search.
 
         table      - Cobra table whose RED trade-count band is rejected ('main'|'alt')
@@ -89,17 +90,21 @@ class instrument_strategy():
         start      - first bar of the backtest window (indicators still use the
                      earlier history for warm-up)
         sampler    - optional custom Optuna sampler (overrides seed)
+        in_sample_end - optional last in-sample date: the search only sees
+                     bars up to it (hold-out = everything after, see
+                     evaluation_test.holdout_report)
         Returns the study (also stored in self.study)."""
         check_mode(mode)
         components = tpi.resolve_components(components)
         self.mode, self.table, self.components, self.start = mode, table, components, start
+        self.in_sample_end = in_sample_end
 
         price = self.load_price()
         self.price = price
 
         #price['return'] = price['close'].pct_change(fill_method=None)
 
-        benchmark_metrics = buyhold_data.buyhold_benchmark(price.loc[start:], self.deposit, self.instrument_type, self.risk_free_rate)
+        benchmark_metrics = buyhold_data.buyhold_benchmark(price.loc[start:in_sample_end], self.deposit, self.instrument_type, self.risk_free_rate)
         self.benchmark_metrics = benchmark_metrics
         self.benchmark_returns = benchmark_metrics['return']
         
@@ -121,7 +126,8 @@ class instrument_strategy():
             m = evaluation_test.run_backtest(price, self.deposit, self.instrument_type,
                                              self.risk_free_rate, mode,
                                              self.benchmark_returns, params,
-                                             components=components, start=start)
+                                             components=components, start=start,
+                                             end=in_sample_end)
             if m is None:
                 # strategy was liquidated on a short
                 record_constraints(trial, {'num_trades': 0.0, 'liquidation': 1.0,
@@ -159,7 +165,8 @@ class instrument_strategy():
         # ustawienia badania zapisane w study (potrzebne w teście odporności)
         for key, value in {'instrument': self.instrument, 'instrument_type': self.instrument_type,
                            'mode': mode, 'table': table, 'components': components,
-                           'start': start, 'deposit': self.deposit,
+                           'start': start, 'in_sample_end': in_sample_end,
+                           'deposit': self.deposit,
                            'risk_free_rate': self.risk_free_rate, 'seed': seed}.items():
             study.set_user_attr(key, value)
 

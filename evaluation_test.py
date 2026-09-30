@@ -64,7 +64,7 @@ def eval(deposit: int, instrument, safe_investment: float = 0.03, *,
          ticker: str, data_dir: str = None, file_path: str = None,
          mode: str = 'long_short', table: str = 'main', components=None,
          n_trials: int = 5000, n_jobs: int = -1, seed: int = None,
-         start: str = '2018-01-01'):
+         start: str = '2018-01-01', in_sample_end: str = None):
     """Optuna search -> all Pareto fronts (feasible trials only).
     `instrument` is the instrument TYPE ('crypto' or 'stocks'); the data is
     chosen by `ticker` (+ optional data_dir / file_path). Before, this ran
@@ -74,7 +74,7 @@ def eval(deposit: int, instrument, safe_investment: float = 0.03, *,
                                                  data_dir=data_dir, file_path=file_path)
     strat_1.strategy_evaluation(table=table, mode=mode, components=components,
                                 n_trials=n_trials, n_jobs=n_jobs, seed=seed,
-                                start=start)
+                                start=start, in_sample_end=in_sample_end)
 
     study = strat_1.study
 
@@ -459,7 +459,8 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
                               table: str = 'main', *,
                               ticker: str, data_dir: str = None,
                               file_path: str = None, components=None,
-                              start: str = '2018-01-01'):
+                              start: str = '2018-01-01',
+                              in_sample_end: str = None):
     """Walk the Pareto fronts in order and run the Robustness Factory
     parameter test on every candidate of each front.
 
@@ -478,7 +479,8 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
     `instrument` is the instrument TYPE ('crypto'/'stocks'); the price data
     comes from `ticker` (+ data_dir / file_path). `mode` must match the mode
     the study was optimised with. `components` defaults to the components
-    recorded on each trial (user attr), else all registered components."""
+    recorded on each trial (user attr), else all registered components.
+    `in_sample_end` must match the study's: the test only uses bars up to it."""
     check_table(table)
     optuna_testing.check_mode(mode)
     optuna_testing.check_instrument_type(instrument)
@@ -488,7 +490,7 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
 
     # benchmark is identical for every candidate -> compute it once
     benchmark_metrics = buyhold_data.buyhold_benchmark(
-        price.loc[start:], deposit, instrument, safe_investment)
+        price.loc[start:in_sample_end], deposit, instrument, safe_investment)
     benchmark_returns = benchmark_metrics['return']
 
     backtest_cache = {}   # avoids re-running duplicate parameter sets
@@ -515,7 +517,8 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
                 candidate_robustness_with_improvement(
                     price, deposit, instrument, safe_investment, mode,
                     benchmark_returns, base_params, backtest_cache, verbose,
-                    table=table, components=trial_components, start=start)
+                    table=table, components=trial_components, start=start,
+                    end=in_sample_end)
 
             if overall_cov is None:
                 print(f"  Candidate {i+1}: DISQUALIFIED ({report})")
@@ -560,6 +563,64 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
     print(f"\n{len(passing_candidates)} candidate(s) passed across all "
           f"evaluated fronts, sorted by overall CoV.")
     return passing_candidates
+
+
+def holdout_report(deposit: int, instrument, params: dict, in_sample_end: str,
+                   safe_investment: float = 0.0, mode: str = 'long_short',
+                   table: str = 'main', components=None, *, ticker: str,
+                   data_dir: str = None, file_path: str = None, end: str = None,
+                   verbose: bool = True):
+    """Table metrics and Cobra colours on the HELD-BACK period, i.e. the bars
+    after `in_sample_end` (up to `end`, default: last bar).
+
+    Indicators are computed on the full history up to `end` (the in-sample
+    bars are the warm-up); nothing after `end` is used. Like every window in
+    run_backtest, the hold-out starts flat on its first bar. Note: the trade
+    count bands are meant for multi-year histories, so on a short hold-out
+    the num_trades colour is mostly informative.
+    Returns a dict (metrics None if the strategy was liquidated)."""
+    check_table(table)
+    optuna_testing.check_mode(mode)
+    optuna_testing.check_instrument_type(instrument)
+    components = tpi.resolve_components(components)
+    dataframe = data_import.data_importer(ticker, data_dir=data_dir, file_path=file_path)
+    dataframe.import_csv_file()
+    price = dataframe.df
+
+    in_sample = price.loc[:in_sample_end]
+    after = price.index[price.index > in_sample.index[-1]] if len(in_sample) else price.index
+    if end is not None:
+        after = after[after <= price.loc[:end].index[-1]]
+    if len(after) == 0:
+        raise ValueError(f"No bars after in_sample_end={in_sample_end} for {ticker}")
+    holdout_start, holdout_end = after[0], after[-1]
+
+    benchmark = buyhold_data.buyhold_benchmark(
+        price.loc[holdout_start:holdout_end], deposit, instrument, safe_investment)
+    metrics = run_backtest(price, deposit, instrument, safe_investment, mode,
+                           benchmark['return'], params, components=components,
+                           start=holdout_start, end=holdout_end)
+    report = {'ticker': ticker, 'mode': mode, 'table': table,
+              'components': components, 'params': dict(params),
+              'holdout_start': holdout_start, 'holdout_end': holdout_end,
+              'bars': len(after), 'benchmark': benchmark, 'metrics': metrics,
+              'colors': None, 'greens': None, 'reds': None, 'passed': False}
+    if metrics is not None:
+        ok, greens, reds, colors = column_verdict(metrics, table)
+        report.update(colors=colors, greens=greens, reds=reds, passed=ok)
+    if verbose:
+        print(f"Hold-out {ticker} {holdout_start.date()} -> {holdout_end.date()} "
+              f"({len(after)} bars, {mode}, table={table}):")
+        if metrics is None:
+            print("  LIQUIDATED")
+        else:
+            for m in TABLE_METRICS:
+                print(f"  {m:15s} {metrics[m]:10.4f}  {report['colors'][m]}")
+            print(f"  calmar {metrics['calmar']:.4f}, alpha vs B&H {metrics['alpha']:.2f} pp "
+                  f"(B&H return {benchmark['return']:.2f}%) -> "
+                  f"{report['greens']} green / {report['reds']} red, "
+                  f"{'PASS' if report['passed'] else 'FAIL'}")
+    return report
 
 
 if __name__ == "__main__":
