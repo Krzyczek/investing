@@ -38,25 +38,68 @@ def is_feasible(trial) -> bool:
     return not (trial.values is not None and list(trial.values) == PENALTY_VALUES)
 
 
+INSTRUMENT_TYPES = ('crypto', 'stocks')   # crypto annualises at 365 days, stocks at 252
+MODES = ('long_only', 'long_short')
+
+
+def check_instrument_type(instrument_type):
+    if instrument_type not in INSTRUMENT_TYPES:
+        raise ValueError(f"instrument_type must be one of {INSTRUMENT_TYPES}, got {instrument_type!r}")
+    return instrument_type
+
+
+def check_mode(mode):
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
+    return mode
+
+
 class instrument_strategy():
-    def __init__(self, instrument: str, instrument_type: str, deposit: int,risk_free_rate:float = 0.03):
-        """Instrument input is a string format for yfinance ticker (work in progress)
-        Instrument type is either stocks or crypto (at the moment)
-        Deposit is the int number for your current cash reserves"""
+    def __init__(self, instrument: str, instrument_type: str, deposit: int = 12000,
+                 risk_free_rate: float = 0.03, data_dir: str = None, file_path: str = None):
+        """instrument      - ticker whose CSV is loaded (e.g. 'BTC-USD', 'CDR.WA')
+        instrument_type - 'crypto' (365-day annualisation) or 'stocks' (252)
+        deposit         - starting cash (default 12000, as in the entry scripts)
+        risk_free_rate  - annual rate as a decimal
+        data_dir / file_path - where the CSV lives (see data_import.data_importer)"""
         self.instrument = instrument
         self.deposit = deposit
-        self.instrument_type = instrument_type
+        self.instrument_type = check_instrument_type(instrument_type)
         self.risk_free_rate = risk_free_rate
-        
+        self.data_dir = data_dir
+        self.file_path = file_path
 
-    def strategy_evaluation(self, table: str = 'main'):
-        dataframe = data_import.data_importer(self.instrument)
+    def load_price(self):
+        dataframe = data_import.data_importer(self.instrument, data_dir=self.data_dir,
+                                              file_path=self.file_path)
         dataframe.import_csv_file()
-        price = dataframe.df
+        return dataframe.df
+
+    def strategy_evaluation(self, table: str = 'main', mode: str = 'long_short',
+                            components=None, n_trials: int = 5000, n_jobs: int = -1,
+                            seed: int = None, start: str = '2018-01-01', sampler=None):
+        """Run the multi-objective (Sortino, Calmar) Optuna search.
+
+        table      - Cobra table whose RED trade-count band is rejected ('main'|'alt')
+        mode       - 'long_short' (default, as before) or 'long_only'
+        components - TPI components to optimise (default: all registered)
+        n_trials / n_jobs - Optuna budget; n_jobs=-1 uses all cores (threads)
+        seed       - NSGA-II seed (None = not reproducible; with n_jobs != 1
+                     thread scheduling can still change the order of trials)
+        start      - first bar of the backtest window (indicators still use the
+                     earlier history for warm-up)
+        sampler    - optional custom Optuna sampler (overrides seed)
+        Returns the study (also stored in self.study)."""
+        check_mode(mode)
+        components = tpi.resolve_components(components)
+        self.mode, self.table, self.components, self.start = mode, table, components, start
+
+        price = self.load_price()
+        self.price = price
 
         #price['return'] = price['close'].pct_change(fill_method=None)
 
-        benchmark_metrics = buyhold_data.buyhold_benchmark(price.loc['2018-01-01':], self.deposit, self.instrument_type, self.risk_free_rate)
+        benchmark_metrics = buyhold_data.buyhold_benchmark(price.loc[start:], self.deposit, self.instrument_type, self.risk_free_rate)
         self.benchmark_metrics = benchmark_metrics
         self.benchmark_returns = benchmark_metrics['return']
         
@@ -70,13 +113,15 @@ class instrument_strategy():
         red_below, _, green_to = evaluation_test.TRADE_COUNT_BANDS[table]
 
         def objective(trial):
-            params = tpi.suggest_params(trial)
-            if not tpi.params_valid(params):
+            params = tpi.suggest_params(trial, components)
+            trial.set_user_attr('components', components)
+            if not tpi.params_valid(params, components):
                 raise optuna.TrialPruned()
 
             m = evaluation_test.run_backtest(price, self.deposit, self.instrument_type,
-                                             self.risk_free_rate, 'long_short',
-                                             self.benchmark_returns, params)
+                                             self.risk_free_rate, mode,
+                                             self.benchmark_returns, params,
+                                             components=components, start=start)
             if m is None:
                 # strategy was liquidated on a short
                 record_constraints(trial, {'num_trades': 0.0, 'liquidation': 1.0,
@@ -105,28 +150,35 @@ class instrument_strategy():
 
             return round(m['sortino'], 4), round(m['calmar'], 4)
         
-        if __name__ != "__main__":
-            # Opcja 'maximize' mówi Optunie, że im większy wynik z return, tym lepiej
-            # NSGA-II jawnie: w Optunie 5 domyślnym samplerem jest TPE, a
-            # NSGA-II obsługuje ograniczenia (constrained domination)
-            study = optuna.create_study(directions=['maximize','maximize'],
-                                        sampler=optuna.samplers.NSGAIISampler())
+        # Opcja 'maximize' mówi Optunie, że im większy wynik z return, tym lepiej
+        # NSGA-II jawnie: w Optunie 5 domyślnym samplerem jest TPE, a
+        # NSGA-II obsługuje ograniczenia (constrained domination)
+        if sampler is None:
+            sampler = optuna.samplers.NSGAIISampler(seed=seed)
+        study = optuna.create_study(directions=['maximize','maximize'], sampler=sampler)
+        # ustawienia badania zapisane w study (potrzebne w teście odporności)
+        for key, value in {'instrument': self.instrument, 'instrument_type': self.instrument_type,
+                           'mode': mode, 'table': table, 'components': components,
+                           'start': start, 'deposit': self.deposit,
+                           'risk_free_rate': self.risk_free_rate, 'seed': seed}.items():
+            study.set_user_attr(key, value)
+
+        print("Rozpoczynam poszukiwanie najlepszych parametrów...")
+        study.optimize(objective, n_trials=n_trials, n_jobs=n_jobs) # n_jobs=-1 używa wszystkich rdzeni procesora!
+        self.study = study
+        print("\n--- ZAKOŃCZONO OPTYMALIZACJĘ ---")
+        best = study.best_trials   # constrained study -> feasible trials only
+        lista=[]
+        for trial in best:
+                parametry = trial.params
+                lista.append({'parametry':parametry})
+        if not lista:
+            lista=[{'parametry':0}]
             
-            print("Rozpoczynam poszukiwanie najlepszych parametrów...")
-            study.optimize(objective, n_trials=5000, n_jobs=-1) # n_jobs=-1 używa wszystkich rdzeni procesora!
-            self.study = study
-            print("\n--- ZAKOŃCZONO OPTYMALIZACJĘ ---")
-            best = study.best_trials
-            lista=[]
-            for trial in best:
-                    parametry = trial.params
-                    lista.append({'parametry':parametry})
-            if not lista:
-                lista=[{'parametry':0}]
-                
-            #print(f"Optymalne parametry: {study.best_params}")
-            df_best_trials = pd.DataFrame(lista)
-            self.best_trials = df_best_trials
+        #print(f"Optymalne parametry: {study.best_params}")
+        df_best_trials = pd.DataFrame(lista)
+        self.best_trials = df_best_trials
+        return study
 
 
     
