@@ -32,7 +32,7 @@ def selected_test(pareto_fronts, instrument, safe_investment, deposit: int = 120
 
 def selection(ticker: str = None, instrument: str = None, safe_investment: float = None,
               deposit: int = 12000, data_dir: str = None, file_path: str = None,
-              mode: str = 'long_short', table: str = 'main', components=None,
+              mode: str = 'long_short', table: str = None, components=None,
               start: str = '2018-01-01', in_sample_end: str = None, **optuna_kwargs):
     """Optuna -> robustness -> z-score ranking. Anything not passed is asked
     for interactively (as before). optuna_kwargs: n_trials, n_jobs, seed."""
@@ -54,6 +54,9 @@ def selection(ticker: str = None, instrument: str = None, safe_investment: float
                   table=table, components=components, start=start,
                   in_sample_end=in_sample_end)
     eval = evaluation_test.eval(deposit, instrument, safe_investment, **common, **optuna_kwargs)
+    if isinstance(eval, evaluation_test.AssetSkipped):
+        print(f"{ticker} skipped: {eval.reason}")
+        return eval
     selection = selected_test(eval, instrument, safe_investment, deposit, **common)
     if selection is None or selection.empty:
         print("No valid data found in the selection.")

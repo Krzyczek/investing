@@ -77,15 +77,19 @@ class instrument_strategy():
         dataframe.import_csv_file()
         return dataframe.df
 
-    def strategy_evaluation(self, table: str = 'main', mode: str = 'long_short',
+    def strategy_evaluation(self, table: str = None, mode: str = 'long_short',
                             components=None, n_trials: int = 5000, n_jobs: int = -1,
                             seed: int = None, start: str = '2018-01-01', sampler=None,
                             in_sample_end: str = None):
         """Run the multi-objective (Sortino, Calmar) Optuna search.
 
         table      - Cobra table ('main'|'alt'): a trial with ANY red metric on
-                     it is infeasible (graded constraint per metric)
-        mode       - 'long_short' (default, as before) or 'long_only'
+                     it is infeasible (graded constraint per metric).
+                     None/'auto' (default) = evaluation_test.select_table by
+                     history length; too little history -> no study, returns
+                     an (empty) evaluation_test.AssetSkipped, also in self.skipped
+        mode       - 'long_short' (default, the primary mode) or 'long_only'
+                     (diagnostic flag only)
         components - TPI components to optimise (default: all registered)
         n_trials / n_jobs - Optuna budget; n_jobs=-1 uses all cores (threads)
         seed       - NSGA-II seed (None = not reproducible; with n_jobs != 1
@@ -99,11 +103,23 @@ class instrument_strategy():
         Returns the study (also stored in self.study)."""
         check_mode(mode)
         components = tpi.resolve_components(components)
-        self.mode, self.table, self.components, self.start = mode, table, components, start
-        self.in_sample_end = in_sample_end
+        # Import leniwy, bo evaluation_test importuje ten moduł.
+        import evaluation_test
 
         price = self.load_price()
         self.price = price
+        self.skipped = None
+        self.study = None
+
+        # wybór tabeli kolorów (main/alt) i ewentualne pominięcie aktywa
+        choice = evaluation_test.resolve_table(price, table, start, self.instrument)
+        self.table_choice = choice
+        if choice['skip']:
+            self.skipped = evaluation_test.AssetSkipped(self.instrument, choice['reason'], choice)
+            return self.skipped
+        table, start = choice['table'], choice['start']
+        self.mode, self.table, self.components, self.start = mode, table, components, start
+        self.in_sample_end = in_sample_end
 
         #price['return'] = price['close'].pct_change(fill_method=None)
 
@@ -114,10 +130,7 @@ class instrument_strategy():
         # Jedna definicja backtestu i liczby transakcji dla Optuny i testu
         # odporności: evaluation_test.run_backtest (te same kroki co wcześniej
         # tutaj: sygnał TPI na pełnej historii, przesunięcie o 1 dzień, kapitał
-        # close/high/low, metryki). Import leniwy, bo evaluation_test importuje
-        # ten moduł.
-        import evaluation_test
-        evaluation_test.check_table(table)
+        # close/high/low, metryki).
 
         def objective(trial):
             params = tpi.suggest_params(trial, components)
@@ -167,8 +180,9 @@ class instrument_strategy():
         study = optuna.create_study(directions=['maximize','maximize'], sampler=sampler)
         # ustawienia badania zapisane w study (potrzebne w teście odporności)
         for key, value in {'instrument': self.instrument, 'instrument_type': self.instrument_type,
-                           'mode': mode, 'table': table, 'components': components,
-                           'start': start, 'in_sample_end': in_sample_end,
+                           'mode': mode, 'table': table, 'table_reason': choice['reason'],
+                           'table_source': choice['source'], 'components': components,
+                           'start': str(start), 'in_sample_end': in_sample_end,
                            'deposit': self.deposit,
                            'risk_free_rate': self.risk_free_rate, 'seed': seed}.items():
             study.set_user_attr(key, value)

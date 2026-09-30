@@ -37,6 +37,91 @@ def check_table(table):
     return table
 
 
+# ---------- automatic colour-table choice by history length ----------
+# Decided with Krzyczek:
+#   MAIN  first valid bar (first non-NaN OHLC row) on or before the backtest
+#         start (default 2018-01-01); a first bar exactly ON the start is MAIN
+#   ALT   first valid bar after the start AND at least MIN_HISTORY_YEARS
+#         calendar years from the first valid bar to the last complete bar
+#   SKIP  less than that: no TPI for the asset (logged, never raised)
+# The last row of the loaded data is taken as the last complete bar: the
+# incomplete current bar must already be removed by the data source (the TA
+# data store drops it).
+# ALT assets have no history before the start, so their backtest window
+# starts ALT_WARMUP_BARS valid bars after the first bar (those bars are the
+# indicator warm-up). 200 bars covers the longest lookback in the search
+# space (EMA / ADX / Aroon up to 100, ADX needs ~2x its period to settle) and
+# is the same for every trial, so all trials of a study share one window.
+MIN_HISTORY_YEARS = 3
+ALT_WARMUP_BARS = 200
+
+
+class AssetSkipped(list):
+    """Result for an asset that gets no TPI (too little history).
+    It is an EMPTY list, so code iterating over Pareto fronts / candidates
+    simply does nothing, and multi-asset loops continue. Check with
+    isinstance(result, AssetSkipped); .reason says why."""
+    skipped = True
+
+    def __init__(self, ticker, reason, choice=None):
+        super().__init__()
+        self.ticker = ticker
+        self.reason = reason
+        self.choice = choice or {}
+
+    def __repr__(self):
+        return f"AssetSkipped({self.ticker!r}: {self.reason})"
+
+
+def select_table(price_df, start='2018-01-01', min_years=MIN_HISTORY_YEARS,
+                 warmup_bars=ALT_WARMUP_BARS) -> dict:
+    """Choose the Cobra table from the asset's history length (rules above).
+    Returns a dict: table ('main'|'alt'|None), skip (bool), reason, start
+    (effective backtest start), first_bar, last_bar, history_years."""
+    ohlc = [c for c in ('open', 'high', 'low', 'close') if c in price_df.columns]
+    valid = price_df.dropna(subset=ohlc)
+    start_ts = pd.Timestamp(start)
+    if valid.empty:
+        return {'table': None, 'skip': True, 'reason': 'no valid OHLC bars',
+                'start': None, 'first_bar': None, 'last_bar': None, 'history_years': 0.0}
+    first, last = valid.index[0], valid.index[-1]
+    years = (last - first).days / 365.25
+    out = {'first_bar': first, 'last_bar': last, 'history_years': round(years, 2)}
+    if first <= start_ts:
+        return {**out, 'table': 'main', 'skip': False, 'start': start,
+                'reason': (f"first valid bar {first.date()} is on or before the backtest "
+                           f"start {start_ts.date()} -> MAIN table")}
+    if last >= first + pd.DateOffset(years=min_years):
+        eff = valid.index[min(warmup_bars, len(valid) - 1)]
+        return {**out, 'table': 'alt', 'skip': False, 'start': eff,
+                'reason': (f"first valid bar {first.date()} is after {start_ts.date()} and "
+                           f"{years:.2f} years to the last bar {last.date()} (>= {min_years}) "
+                           f"-> ALT table; backtest starts {eff.date()} after "
+                           f"{warmup_bars} warm-up bars")}
+    return {**out, 'table': None, 'skip': True, 'start': None,
+            'reason': (f"first valid bar {first.date()} is after {start_ts.date()} and only "
+                       f"{years:.2f} years to the last bar {last.date()} (< {min_years}) "
+                       f"-> no TPI, asset skipped")}
+
+
+def resolve_table(price_df, table=None, start='2018-01-01', ticker='', verbose=True) -> dict:
+    """table None/'auto' -> select_table(); explicit 'main'/'alt' overrides it
+    (the requested start is then used unchanged). Always logs the choice."""
+    if table in (None, 'auto'):
+        choice = {**select_table(price_df, start), 'source': 'auto'}
+    else:
+        check_table(table)
+        choice = {'table': table, 'skip': False, 'start': start, 'source': 'explicit',
+                  'reason': f"explicit table='{table}' (automatic rule not applied)",
+                  'first_bar': None, 'last_bar': None, 'history_years': None}
+    if verbose:
+        s = choice['start']
+        s = s.date() if isinstance(s, pd.Timestamp) else s
+        print(f"[colour table] {ticker}: {choice['table'] or 'SKIP'} ({choice['source']}) - "
+              f"{choice['reason']}; backtest start: {s}")
+    return choice
+
+
 def count_trades(position) -> int:
     """THE trade definition used everywhere (Optuna filter, robustness table,
     reports): the number of non-flat position segments. A segment is a run of
@@ -62,19 +147,23 @@ def dedupe_fronts(pareto_fronts):
 
 def eval(deposit: int, instrument, safe_investment: float = 0.03, *,
          ticker: str, data_dir: str = None, file_path: str = None,
-         mode: str = 'long_short', table: str = 'main', components=None,
+         mode: str = 'long_short', table: str = None, components=None,
          n_trials: int = 5000, n_jobs: int = -1, seed: int = None,
          start: str = '2018-01-01', in_sample_end: str = None):
     """Optuna search -> all Pareto fronts (feasible trials only).
     `instrument` is the instrument TYPE ('crypto' or 'stocks'); the data is
     chosen by `ticker` (+ optional data_dir / file_path). Before, this ran
-    'CDR.WA' labelled with whatever type was passed."""
+    'CDR.WA' labelled with whatever type was passed.
+    table=None/'auto' picks the table from the history length (select_table);
+    an asset with too little history returns an (empty) AssetSkipped."""
 
     strat_1 = optuna_testing.instrument_strategy(ticker, instrument, deposit, safe_investment,
                                                  data_dir=data_dir, file_path=file_path)
     strat_1.strategy_evaluation(table=table, mode=mode, components=components,
                                 n_trials=n_trials, n_jobs=n_jobs, seed=seed,
                                 start=start, in_sample_end=in_sample_end)
+    if strat_1.skipped is not None:
+        return strat_1.skipped
 
     study = strat_1.study
 
@@ -495,7 +584,7 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
                               cov_threshold: float = None,
                               max_fronts: int = 10,
                               verbose: bool = False,
-                              table: str = 'main', *,
+                              table: str = None, *,
                               ticker: str, data_dir: str = None,
                               file_path: str = None, components=None,
                               start: str = '2018-01-01',
@@ -513,19 +602,24 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
     returned sorted by overall CoV (most robust first), then front rank.
     Each candidate is first run through the guide's improvement loop, so
     the returned params may differ from the trial's originals. Returns []
-    if nothing passes. `table` selects the Cobra table ('main' or 'alt').
+    if nothing passes. `table` selects the Cobra table ('main' or 'alt');
+    None/'auto' = select_table() by history length, which also sets the
+    effective start for ALT assets. Too little history -> AssetSkipped.
 
     `instrument` is the instrument TYPE ('crypto'/'stocks'); the price data
     comes from `ticker` (+ data_dir / file_path). `mode` must match the mode
     the study was optimised with. `components` defaults to the components
     recorded on each trial (user attr), else all registered components.
     `in_sample_end` must match the study's: the test only uses bars up to it."""
-    check_table(table)
     optuna_testing.check_mode(mode)
     optuna_testing.check_instrument_type(instrument)
     dataframe = data_import.data_importer(ticker, data_dir=data_dir, file_path=file_path)
     dataframe.import_csv_file()
     price = dataframe.df
+    choice = resolve_table(price, table, start, ticker)
+    if choice['skip']:
+        return AssetSkipped(ticker, choice['reason'], choice)
+    table, start = choice['table'], choice['start']
 
     # benchmark is identical for every candidate -> compute it once
     benchmark_metrics = buyhold_data.buyhold_benchmark(
@@ -606,9 +700,9 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
 
 def holdout_report(deposit: int, instrument, params: dict, in_sample_end: str,
                    safe_investment: float = 0.0, mode: str = 'long_short',
-                   table: str = 'main', components=None, *, ticker: str,
+                   table: str = None, components=None, *, ticker: str,
                    data_dir: str = None, file_path: str = None, end: str = None,
-                   verbose: bool = True):
+                   verbose: bool = True, start: str = '2018-01-01'):
     """Table metrics and Cobra colours on the HELD-BACK period, i.e. the bars
     after `in_sample_end` (up to `end`, default: last bar).
 
@@ -617,14 +711,21 @@ def holdout_report(deposit: int, instrument, params: dict, in_sample_end: str,
     run_backtest, the hold-out starts flat on its first bar. Note: the trade
     count bands are meant for multi-year histories, so on a short hold-out
     the num_trades colour is mostly informative.
-    Returns a dict (metrics None if the strategy was liquidated)."""
-    check_table(table)
+    table=None/'auto' uses the same history-length rule as the study
+    (`start` is the study's backtest start, used only for that rule).
+    Returns a dict (metrics None if the strategy was liquidated; skipped=True
+    with a reason if the asset has too little history)."""
     optuna_testing.check_mode(mode)
     optuna_testing.check_instrument_type(instrument)
     components = tpi.resolve_components(components)
     dataframe = data_import.data_importer(ticker, data_dir=data_dir, file_path=file_path)
     dataframe.import_csv_file()
     price = dataframe.df
+    choice = resolve_table(price, table, start, ticker, verbose)
+    if choice['skip']:
+        return {'ticker': ticker, 'skipped': True, 'reason': choice['reason'],
+                'table': None, 'metrics': None, 'passed': False}
+    table = choice['table']
 
     in_sample = price.loc[:in_sample_end]
     after = price.index[price.index > in_sample.index[-1]] if len(in_sample) else price.index
@@ -639,7 +740,8 @@ def holdout_report(deposit: int, instrument, params: dict, in_sample_end: str,
     metrics = run_backtest(price, deposit, instrument, safe_investment, mode,
                            benchmark['return'], params, components=components,
                            start=holdout_start, end=holdout_end)
-    report = {'ticker': ticker, 'mode': mode, 'table': table,
+    report = {'ticker': ticker, 'skipped': False, 'mode': mode, 'table': table,
+              'table_reason': choice['reason'],
               'components': components, 'params': dict(params),
               'holdout_start': holdout_start, 'holdout_end': holdout_end,
               'bars': len(after), 'benchmark': benchmark, 'metrics': metrics,
@@ -669,7 +771,7 @@ if __name__ == "__main__":
     DEPOSIT = 12000
     RISK_FREE = 0
     MODE = 'long_short'
-    TABLE = 'main'
+    TABLE = None                   # None = automatyczny wybór main/alt wg długości historii
 
     pareto = eval(DEPOSIT, INSTRUMENT_TYPE, RISK_FREE, ticker=TICKER, mode=MODE, table=TABLE)
     pareto = dedupe_fronts(pareto)
