@@ -1,0 +1,8 @@
+# Direct runtime dependencies, pinned to the versions verified on Python 3.13.5
+# (see /workspace/ta/runs/pip_freeze.txt). statsmodels is only needed for
+# indicators.calculate_rolling_adf_pvalues (imported lazily).
+numpy==2.5.3
+pandas==3.0.6
+optuna==5.0.0
+yfinance==1.7.0
+statsmodels==0.15.0

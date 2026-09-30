@@ -2,129 +2,190 @@ import buyhold_data
 import data_import
 import indicators
 import investment_metrics as im
-import plotly.subplots as ps
-import plotly.graph_objects as go
 import numpy as np
 import pandas as pd
 import tpi
 import optuna
 
+# Wartości zwracane przez Optunę dla strategii odrzuconych przez filtry.
+# Od teraz takie próby są dodatkowo oznaczone jako NIEDOPUSZCZALNE przez
+# trial.set_constraint(...), więc nie trafiają do frontów Pareto ani do testu
+# odporności, a sampler NSGA-II nadal się na nich uczy (constrained domination).
+PENALTY_VALUES = [-1000, 0]
+MAX_CLOSE_DRAWDOWN = 0.60
+
+
+def record_constraints(trial, violations: dict):
+    """Store constraint violations on the trial (value > 0 == violated).
+    Optuna 5: trial.set_constraint is read by NSGAIISampler (constrained
+    domination) and by study.best_trials; the dict is also kept as a user
+    attr so it is visible in trials_dataframe()."""
+    for name, value in violations.items():
+        trial.set_constraint(name, float(value))
+    trial.set_user_attr('constraints', {k: float(v) for k, v in violations.items()})
+    trial.set_user_attr('feasible', all(v <= 0 for v in violations.values()))
+
+
+def is_feasible(trial) -> bool:
+    """True for a COMPLETE trial that satisfied every filter. Trials from
+    studies run before constraints were recorded are recognised by the
+    [-1000, 0] penalty values."""
+    if trial.state != optuna.trial.TrialState.COMPLETE:
+        return False
+    constraints = getattr(trial, 'constraints', None) or {}
+    if constraints:
+        return all(v <= 0 for v in constraints.values())
+    return not (trial.values is not None and list(trial.values) == PENALTY_VALUES)
+
+
+INSTRUMENT_TYPES = ('crypto', 'stocks')   # crypto annualises at 365 days, stocks at 252
+MODES = ('long_only', 'long_short')
+
+
+def check_instrument_type(instrument_type):
+    if instrument_type not in INSTRUMENT_TYPES:
+        raise ValueError(f"instrument_type must be one of {INSTRUMENT_TYPES}, got {instrument_type!r}")
+    return instrument_type
+
+
+def check_mode(mode):
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
+    return mode
+
+
 class instrument_strategy():
-    def __init__(self, instrument: str, instrument_type: str, deposit: int,risk_free_rate:float = 0.03):
-        """Instrument input is a string format for yfinance ticker (work in progress)
-        Instrument type is either stocks or crypto (at the moment)
-        Deposit is the int number for your current cash reserves"""
+    def __init__(self, instrument: str, instrument_type: str, deposit: int = 12000,
+                 risk_free_rate: float = 0.03, data_dir: str = None, file_path: str = None):
+        """instrument      - ticker whose CSV is loaded (e.g. 'BTC-USD', 'CDR.WA')
+        instrument_type - 'crypto' (365-day annualisation) or 'stocks' (252)
+        deposit         - starting cash (default 12000, as in the entry scripts)
+        risk_free_rate  - annual rate as a decimal
+        data_dir / file_path - where the CSV lives (see data_import.data_importer)"""
         self.instrument = instrument
         self.deposit = deposit
-        self.instrument_type = instrument_type
+        self.instrument_type = check_instrument_type(instrument_type)
         self.risk_free_rate = risk_free_rate
-        
+        self.data_dir = data_dir
+        self.file_path = file_path
 
-    def strategy_evaluation(self):
-        dataframe = data_import.data_importer(self.instrument)
+    def load_price(self):
+        dataframe = data_import.data_importer(self.instrument, data_dir=self.data_dir,
+                                              file_path=self.file_path)
         dataframe.import_csv_file()
-        price = dataframe.df
+        return dataframe.df
+
+    def strategy_evaluation(self, table: str = 'main', mode: str = 'long_short',
+                            components=None, n_trials: int = 5000, n_jobs: int = -1,
+                            seed: int = None, start: str = '2018-01-01', sampler=None,
+                            in_sample_end: str = None):
+        """Run the multi-objective (Sortino, Calmar) Optuna search.
+
+        table      - Cobra table whose RED trade-count band is rejected ('main'|'alt')
+        mode       - 'long_short' (default, as before) or 'long_only'
+        components - TPI components to optimise (default: all registered)
+        n_trials / n_jobs - Optuna budget; n_jobs=-1 uses all cores (threads)
+        seed       - NSGA-II seed (None = not reproducible; with n_jobs != 1
+                     thread scheduling can still change the order of trials)
+        start      - first bar of the backtest window (indicators still use the
+                     earlier history for warm-up)
+        sampler    - optional custom Optuna sampler (overrides seed)
+        in_sample_end - optional last in-sample date: the search only sees
+                     bars up to it (hold-out = everything after, see
+                     evaluation_test.holdout_report)
+        Returns the study (also stored in self.study)."""
+        check_mode(mode)
+        components = tpi.resolve_components(components)
+        self.mode, self.table, self.components, self.start = mode, table, components, start
+        self.in_sample_end = in_sample_end
+
+        price = self.load_price()
+        self.price = price
 
         #price['return'] = price['close'].pct_change(fill_method=None)
 
-        benchmark_metrics = buyhold_data.buyhold_benchmark(price.loc['2018-01-01':], self.deposit, self.instrument_type, self.risk_free_rate)
+        benchmark_metrics = buyhold_data.buyhold_benchmark(price.loc[start:in_sample_end], self.deposit, self.instrument_type, self.risk_free_rate)
         self.benchmark_metrics = benchmark_metrics
         self.benchmark_returns = benchmark_metrics['return']
         
+        # Jedna definicja backtestu i liczby transakcji dla Optuny i testu
+        # odporności: evaluation_test.run_backtest (te same kroki co wcześniej
+        # tutaj: sygnał TPI na pełnej historii, przesunięcie o 1 dzień, kapitał
+        # close/high/low, metryki). Import leniwy, bo evaluation_test importuje
+        # ten moduł.
+        import evaluation_test
+        evaluation_test.check_table(table)
+        red_below, _, green_to = evaluation_test.TRADE_COUNT_BANDS[table]
+
         def objective(trial):
-            params = tpi.suggest_params(trial)
-            if not tpi.params_valid(params):
+            params = tpi.suggest_params(trial, components)
+            trial.set_user_attr('components', components)
+            if not tpi.params_valid(params, components):
                 raise optuna.TrialPruned()
-            
-        
-            test_df = price.copy()
-            # --- OBLICZANIE SYGNAŁU (Z poprawkami znoszącymi wehikuł czasu) ---
-            tpi_signal = tpi.tpi(test_df)
-            #tpi_signal.calculate_perpetual(slow_ma_period,fast_ma_period)
-            #tpi_signal.calculate_oscillator(adx_period,threshold)
-            tpi_signal.calculate_tpi(params, 'long_short')
-            # 1. Sygnał na koniec dzisiejszego dnia
-            test_df['signal'] = tpi_signal.signal
-            test_df = test_df.loc[test_df.index >= '2018-01-01']
-            
-            # 2. PRZESUNIĘCIE SYGNAŁU (Likwidacja wehikułu czasu)
-            shifted_signal = test_df['signal'].shift(1).fillna(0)
-            number_of_trades = (shifted_signal.diff().abs() > 0).sum()
 
-            position_changes = shifted_signal.diff().fillna(0)
-            num_trades = int((position_changes != 0).sum())
+            m = evaluation_test.run_backtest(price, self.deposit, self.instrument_type,
+                                             self.risk_free_rate, mode,
+                                             self.benchmark_returns, params,
+                                             components=components, start=start,
+                                             end=in_sample_end)
+            if m is None:
+                # strategy was liquidated on a short
+                record_constraints(trial, {'num_trades': 0.0, 'liquidation': 1.0,
+                                           'max_drawdown': 1.0 - MAX_CLOSE_DRAWDOWN})
+                return PENALTY_VALUES
+
+            num_trades = m['num_trades']      # non-flat position segments
             trial.set_user_attr('num_trades', num_trades)
-            if not (40 < num_trades <= 100):
-                return [-1000,0]
-            # 3. Zyski i Kapitał
-            test_df['strat_return'] = test_df['return'] * shifted_signal
-            test_df['equity'] = self.deposit * (1 + test_df['strat_return']).cumprod()
-            
-            # 4. Zwroty wewnątrzdzienne (High/Low)
-            test_df['return_high'] = (test_df['high'] - test_df['close'].shift(1)) / test_df['close'].shift(1)
-            test_df['return_low'] = (test_df['low'] - test_df['close'].shift(1)) / test_df['close'].shift(1)
-            
-            # 5. Kapitał High/Low z użyciem prawidłowego (przesuniętego) sygnału
-            prev_equity = test_df['equity'].shift(1).fillna(self.deposit)
-            rh = test_df['return_high'].fillna(0)
-            rl = test_df['return_low'].fillna(0)
-            
-            conditions = [shifted_signal == 1, shifted_signal == -1]
-            # best intraday outcome
-            test_df['equity_high'] = np.select(conditions,
-                [prev_equity * (1 + rh),      # long: high is best
-                prev_equity * (1 - rl)],     # short: low is best
-                default=prev_equity)
-            
-            # worst intraday outcome
-            test_df['equity_low'] = np.select(conditions,
-                [prev_equity * (1 + rl),      # long: low is worst
-                prev_equity * (1 - rh)],     # short: high is worst
-                default=prev_equity)
-                     
-            # 6. BEZPIECZNE wypełnianie braków (tylko dla kolumn kapitałowych!)
-            test_df['equity'] = test_df['equity'].fillna(self.deposit)
-            test_df['equity_high'] = test_df['equity_high'].fillna(self.deposit)
-            test_df['equity_low'] = test_df['equity_low'].fillna(self.deposit)
-            
-            if (1 + test_df['strat_return'] <= 0).any():
-                return [-1000,0]   # strategy was liquidated on a short
-            running_peak = test_df['equity'].cummax()
-            max_drawdown = ((test_df['equity'] - running_peak) / running_peak).min()
+            # Naruszenia są stopniowane (0 = OK), żeby sampler wiedział, która
+            # odrzucona próba była "bliżej" dopuszczalnej:
+            #  - liczba transakcji: tylko CZERWONY zakres wybranej tabeli,
+            #    względna odległość od najbliższej granicy
+            #  - drawdown (close): nadwyżka ponad 60% od szczytu
+            if num_trades < red_below:
+                trades_violation = (red_below - num_trades) / red_below
+            elif num_trades > green_to:
+                trades_violation = (num_trades - green_to) / green_to
+            else:
+                trades_violation = 0.0
+            dd_violation = max(0.0, m['close_max_dd'] - MAX_CLOSE_DRAWDOWN)
+            record_constraints(trial, {'num_trades': trades_violation,
+                                       'liquidation': 0.0,
+                                       'max_drawdown': dd_violation})
+            if trades_violation > 0 or dd_violation > 0:
+                return PENALTY_VALUES   # reject (trade count red / lost >60% from peak)
 
-            if max_drawdown < -0.60:   # reject strategies that lost >60% from peak
-                return [-1000,0]
-            strat_metrics = im.metrics(df=test_df,investment_type = self.instrument_type,risk_free_rate = self.risk_free_rate,returns_column = 'strat_return',starting_equity=self.deposit,high='equity_high',low='equity_low',close='equity',verbose=False)
-            sharpe = strat_metrics.sharpe_ratio()
-            sortino = strat_metrics.sortino_ratio()
-            omega = strat_metrics.omega_ratio()
-            calmar = strat_metrics.calmar_ratio()
-            alpha = strat_metrics.alpha(self.benchmark_returns)
-
-           
-
-            
-            return round(sortino, 4), round(calmar, 4)
+            return round(m['sortino'], 4), round(m['calmar'], 4)
         
-        if __name__ != "__main__":
-            # Opcja 'maximize' mówi Optunie, że im większy wynik z return, tym lepiej
-            study = optuna.create_study(directions=['maximize','maximize'])
+        # Opcja 'maximize' mówi Optunie, że im większy wynik z return, tym lepiej
+        # NSGA-II jawnie: w Optunie 5 domyślnym samplerem jest TPE, a
+        # NSGA-II obsługuje ograniczenia (constrained domination)
+        if sampler is None:
+            sampler = optuna.samplers.NSGAIISampler(seed=seed)
+        study = optuna.create_study(directions=['maximize','maximize'], sampler=sampler)
+        # ustawienia badania zapisane w study (potrzebne w teście odporności)
+        for key, value in {'instrument': self.instrument, 'instrument_type': self.instrument_type,
+                           'mode': mode, 'table': table, 'components': components,
+                           'start': start, 'in_sample_end': in_sample_end,
+                           'deposit': self.deposit,
+                           'risk_free_rate': self.risk_free_rate, 'seed': seed}.items():
+            study.set_user_attr(key, value)
+
+        print("Rozpoczynam poszukiwanie najlepszych parametrów...")
+        study.optimize(objective, n_trials=n_trials, n_jobs=n_jobs) # n_jobs=-1 używa wszystkich rdzeni procesora!
+        self.study = study
+        print("\n--- ZAKOŃCZONO OPTYMALIZACJĘ ---")
+        best = study.best_trials   # constrained study -> feasible trials only
+        lista=[]
+        for trial in best:
+                parametry = trial.params
+                lista.append({'parametry':parametry})
+        if not lista:
+            lista=[{'parametry':0}]
             
-            print("Rozpoczynam poszukiwanie najlepszych parametrów...")
-            study.optimize(objective, n_trials=5000, n_jobs=-1) # n_jobs=-1 używa wszystkich rdzeni procesora!
-            self.study = study
-            print("\n--- ZAKOŃCZONO OPTYMALIZACJĘ ---")
-            best = study.best_trials
-            lista=[]
-            for trial in best:
-                    parametry = trial.params
-                    lista.append({'parametry':parametry})
-            if not lista:
-                lista=[{'parametry':0}]
-                
-            #print(f"Optymalne parametry: {study.best_params}")
-            df_best_trials = pd.DataFrame(lista)
-            self.best_trials = df_best_trials
+        #print(f"Optymalne parametry: {study.best_params}")
+        df_best_trials = pd.DataFrame(lista)
+        self.best_trials = df_best_trials
+        return study
 
 
     
@@ -147,7 +208,9 @@ class instrument_strategy():
                 return better_in_at_least_one
 
         
-        completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+        # tylko próby DOPUSZCZALNE: odrzucone przez filtry ([-1000, 0]) nie
+        # mogą tworzyć frontów Pareto
+        completed = [t for t in study.trials if is_feasible(t)]
 
         # --- deduplicate by params ---
         seen = set()

@@ -19,6 +19,33 @@ TABLE_METRICS = ('max_dd', 'sortino', 'sharpe', 'profit_factor',
 
 MIN_GREEN = 5        # "5/7 green metrics at least and NO RED" per column
 
+# Two Cobra tables: 'main' and 'alt' ("with min 3 yr data"). They are
+# identical except for the # of trades bands:
+#   table -> (red below, green from, green up to; red above)
+#   main: red <40 or >105, yellow 40-44, green 45-105
+#   alt:  red <30 or >95,  yellow 30-34, green 35-95
+# The table is always chosen explicitly (table='main'|'alt'); there is no
+# automatic rule based on history length.
+TRADE_COUNT_BANDS = {'main': (40, 45, 105),
+                     'alt':  (30, 35, 95)}
+COLOR_TABLES = tuple(TRADE_COUNT_BANDS)
+
+
+def check_table(table):
+    if table not in TRADE_COUNT_BANDS:
+        raise ValueError(f"table must be one of {COLOR_TABLES}, got {table!r}")
+    return table
+
+
+def count_trades(position) -> int:
+    """THE trade definition used everywhere (Optuna filter, robustness table,
+    reports): the number of non-flat position segments. A segment is a run of
+    consecutive bars with the same position; flat (0) runs are not trades.
+    long -> short is two trades, long -> flat -> long is two trades."""
+    pos = pd.Series(np.asarray(position, dtype=float)).fillna(0)
+    segment_start = pos != pos.shift()
+    return int((segment_start & (pos != 0)).sum())
+
 
 def dedupe_fronts(pareto_fronts):
     seen = set()
@@ -33,10 +60,21 @@ def dedupe_fronts(pareto_fronts):
         clean.append(kept)
     return clean
 
-def eval(deposit: int, instrument, safe_investment: float = 0.03):
+def eval(deposit: int, instrument, safe_investment: float = 0.03, *,
+         ticker: str, data_dir: str = None, file_path: str = None,
+         mode: str = 'long_short', table: str = 'main', components=None,
+         n_trials: int = 5000, n_jobs: int = -1, seed: int = None,
+         start: str = '2018-01-01', in_sample_end: str = None):
+    """Optuna search -> all Pareto fronts (feasible trials only).
+    `instrument` is the instrument TYPE ('crypto' or 'stocks'); the data is
+    chosen by `ticker` (+ optional data_dir / file_path). Before, this ran
+    'CDR.WA' labelled with whatever type was passed."""
 
-    strat_1 = optuna_testing.instrument_strategy('CDR.WA', instrument, deposit, safe_investment)
-    strat_1.strategy_evaluation()
+    strat_1 = optuna_testing.instrument_strategy(ticker, instrument, deposit, safe_investment,
+                                                 data_dir=data_dir, file_path=file_path)
+    strat_1.strategy_evaluation(table=table, mode=mode, components=components,
+                                n_trials=n_trials, n_jobs=n_jobs, seed=seed,
+                                start=start, in_sample_end=in_sample_end)
 
     study = strat_1.study
 
@@ -45,9 +83,11 @@ def eval(deposit: int, instrument, safe_investment: float = 0.03):
     return pareto_fronts
 
 
-def classify_metric(name, value):
-    """Return 'green', 'yellow' or 'red' according to the Cobra table.
+def classify_metric(name, value, table='main'):
+    """Return 'green', 'yellow' or 'red' according to the Cobra table
+    (table='main' or 'alt'; they differ only in num_trades).
     max_dd is a POSITIVE fraction (0.25 == 25%), pct_profitable a fraction."""
+    check_table(table)
     if not np.isfinite(value):
         # inf profit factor (no losing trades) is the best possible outcome
         if name == 'profit_factor' and value == np.inf:
@@ -64,35 +104,45 @@ def classify_metric(name, value):
     if name == 'pct_profitable':
         return 'red' if value < 0.35 else ('green' if value > 0.50 else 'yellow')
     if name == 'num_trades':
-        if value < 40 or value > 105:
+        red_below, green_from, green_to = TRADE_COUNT_BANDS[table]
+        if value < red_below or value > green_to:
             return 'red'
-        return 'green' if value >= 45 else 'yellow'
+        return 'green' if value >= green_from else 'yellow'
     if name == 'omega':
         return 'red' if value < 1.1 else ('green' if value > 1.31 else 'yellow')
     raise ValueError(f"Unknown metric {name}")
 
 
-def column_verdict(metrics):
+def column_verdict(metrics, table='main'):
     """Apply the guide's per-column rule: >=5/7 green and NO red."""
-    colors = {m: classify_metric(m, metrics[m]) for m in TABLE_METRICS}
+    colors = {m: classify_metric(m, metrics[m], table) for m in TABLE_METRICS}
     greens = sum(1 for c in colors.values() if c == 'green')
     reds = sum(1 for c in colors.values() if c == 'red')
     return (greens >= MIN_GREEN and reds == 0), greens, reds, colors
 
 
 def run_backtest(price, deposit, instrument, safe_investment, mode,
-                 benchmark_returns, params):
+                 benchmark_returns, params, components=None,
+                 start='2018-01-01', end=None):
     """Run one backtest for a given parameter set.
     Returns a metrics dict (7 table metrics + calmar/alpha), or None if the
-    strategy got liquidated (automatic robustness failure)."""
+    strategy got liquidated (automatic robustness failure).
+
+    components - TPI components used (default: all registered)
+    start/end  - backtest window. Indicators are computed on all history
+                 before `start` (warm-up) but on NOTHING after `end`: the
+                 price is cut at `end` before the signal is calculated, so no
+                 future bar can influence the window (no lookahead)."""
     
     test_df = price.copy()
+    if end is not None:
+        test_df = test_df.loc[:end]
     # --- OBLICZANIE SYGNAŁU (Z poprawkami znoszącymi wehikuł czasu) ---
     tpi_signal = tpi.tpi(test_df)
-    tpi_signal.calculate_tpi(params, mode)
+    tpi_signal.calculate_tpi(params, mode, components)
     # 1. Sygnał na koniec dzisiejszego dnia
     test_df['signal'] = tpi_signal.signal
-    test_df = test_df.loc[test_df.index >= '2018-01-01']
+    test_df = test_df.loc[test_df.index >= pd.Timestamp(start)]
 
     # 2. PRZESUNIĘCIE SYGNAŁU (Likwidacja wehikułu czasu)
     shifted_signal = test_df['signal'].shift(1).fillna(0)
@@ -104,6 +154,10 @@ def run_backtest(price, deposit, instrument, safe_investment, mode,
     # Liquidation check (same rule as in the optuna objective)
     if (1 + test_df['strat_return'] <= 0).any():
         return None
+
+    # Close-based max drawdown (used by the optuna ">60% from peak" rule)
+    running_peak = test_df['equity'].cummax()
+    close_max_dd = abs(((test_df['equity'] - running_peak) / running_peak).min())
 
     # 4. Zwroty wewnątrzdzienne (High/Low)
     test_df['return_high'] = (test_df['high'] - test_df['close'].shift(1)) / test_df['close'].shift(1)
@@ -151,7 +205,7 @@ def run_backtest(price, deposit, instrument, safe_investment, mode,
             continue                        # flat period, not a trade
         trade_returns.append((1 + seg['strat_return']).prod() - 1)
 
-    num_trades = len(trade_returns)
+    num_trades = count_trades(pos)          # == len(trade_returns)
     if num_trades > 0:
         wins = [r for r in trade_returns if r > 0]
         losses = [r for r in trade_returns if r < 0]
@@ -172,7 +226,8 @@ def run_backtest(price, deposit, instrument, safe_investment, mode,
             'omega':          strat_metrics.omega_ratio(),
             # extra metrics for the downstream pipeline (not in the table)
             'calmar':         strat_metrics.calmar_ratio(),
-            'alpha':          strat_metrics.alpha(benchmark_returns)}
+            'alpha':          strat_metrics.alpha(benchmark_returns),
+            'close_max_dd':   close_max_dd}
 
 
 def build_step_values(base, lo, hi, step, is_int, n_side=N_SIDE):
@@ -205,7 +260,9 @@ def coefficient_of_variation(values):
 
 def candidate_parameter_robustness(price, deposit, instrument, safe_investment,
                                    mode, benchmark_returns, base_params,
-                                   backtest_cache=None, verbose=False):
+                                   backtest_cache=None, verbose=False,
+                                   table='main', components=None,
+                                   start='2018-01-01', end=None):
     """Robustness Factory parameter test for one candidate.
 
     For every parameter: perturb it over +-N_SIDE step deviations, run the
@@ -217,6 +274,7 @@ def candidate_parameter_robustness(price, deposit, instrument, safe_investment,
     (False, None, reason) if disqualified (liquidation on any column)."""
     if backtest_cache is None:
         backtest_cache = {}
+    window = dict(components=components, start=start, end=end)
 
     per_param_report = {}
     all_columns_pass = True
@@ -227,19 +285,20 @@ def candidate_parameter_robustness(price, deposit, instrument, safe_investment,
     if base_key not in backtest_cache:
         backtest_cache[base_key] = run_backtest(
             price, deposit, instrument, safe_investment, mode,
-            benchmark_returns, base_params)
+            benchmark_returns, base_params, **window)
     base_metrics = backtest_cache[base_key]
     if base_metrics is None:
         return False, None, "liquidated at base parameters"
 
-    for param_name, (ptype, lo, hi, step) in tpi.param_space().items():
+    for param_name, (ptype, lo, hi, step) in tpi.param_space(components).items():
         step_values = build_step_values(
             base=base_params[param_name],
             lo=lo, hi=hi,
             step=step,
             is_int=(ptype == 'int'),
             )        # respect the fast_ma < slow_ma constraint while perturbing
-        step_values = [v for v in step_values if tpi.params_valid({**base_params, param_name: v})]
+        step_values = [v for v in step_values
+                       if tpi.params_valid({**base_params, param_name: v}, components)]
 
         
 
@@ -253,13 +312,13 @@ def candidate_parameter_robustness(price, deposit, instrument, safe_investment,
             if cache_key not in backtest_cache:
                 backtest_cache[cache_key] = run_backtest(
                     price, deposit, instrument, safe_investment, mode,
-                    benchmark_returns, test_params)
+                    benchmark_returns, test_params, **window)
             metrics = backtest_cache[cache_key]
 
             if metrics is None:
                 return False, None, f"liquidated at {param_name}={value}"
 
-            ok, greens, reds, colors = column_verdict(metrics)
+            ok, greens, reds, colors = column_verdict(metrics, table)
             columns.append({'value': value, 'pass': ok,
                             'greens': greens, 'reds': reds, 'colors': colors,
                             'metrics': metrics})
@@ -306,7 +365,9 @@ def candidate_robustness_with_improvement(price, deposit, instrument,
                                           safe_investment, mode,
                                           benchmark_returns, base_params,
                                           backtest_cache=None, verbose=False,
-                                          max_improvement_iters=3):
+                                          max_improvement_iters=3,
+                                          table='main', components=None,
+                                          start='2018-01-01', end=None):
     """Robustness scan + the guide's iterative improvement loop.
 
     'If you stumble across new settings that improve the strategy's
@@ -325,7 +386,8 @@ def candidate_robustness_with_improvement(price, deposit, instrument,
     params = dict(base_params)
     colors_ok, overall_cov, report = candidate_parameter_robustness(
         price, deposit, instrument, safe_investment, mode,
-        benchmark_returns, params, backtest_cache, verbose)
+        benchmark_returns, params, backtest_cache, verbose, table=table,
+        components=components, start=start, end=end)
     if overall_cov is None:
         return colors_ok, overall_cov, report, params
 
@@ -334,7 +396,7 @@ def candidate_robustness_with_improvement(price, deposit, instrument,
 
         # best passing & improving column across all parameters
         best = None
-        for param_name in tpi.param_space():
+        for param_name in tpi.param_space(components):
             for col in report[param_name]['columns']:
                 if col['value'] == params[param_name]:
                     continue                      # that's the base itself
@@ -361,7 +423,8 @@ def candidate_robustness_with_improvement(price, deposit, instrument,
         # full re-scan around the promoted base (cache makes this cheap)
         new_ok, new_cov, new_report = candidate_parameter_robustness(
             price, deposit, instrument, safe_investment, mode,
-            benchmark_returns, params, backtest_cache, verbose)
+            benchmark_returns, params, backtest_cache, verbose, table=table,
+        components=components, start=start, end=end)
         if new_cov is None:
             # promoted base liquidates somewhere in its neighbourhood;
             # 'sacrificing parameter robustness for performance' -> revert
@@ -392,7 +455,12 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
                               mode: str = 'long_short',
                               cov_threshold: float = None,
                               max_fronts: int = 10,
-                              verbose: bool = False):
+                              verbose: bool = False,
+                              table: str = 'main', *,
+                              ticker: str, data_dir: str = None,
+                              file_path: str = None, components=None,
+                              start: str = '2018-01-01',
+                              in_sample_end: str = None):
     """Walk the Pareto fronts in order and run the Robustness Factory
     parameter test on every candidate of each front.
 
@@ -406,14 +474,23 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
     returned sorted by overall CoV (most robust first), then front rank.
     Each candidate is first run through the guide's improvement loop, so
     the returned params may differ from the trial's originals. Returns []
-    if nothing passes."""
-    dataframe = data_import.data_importer(instrument)
+    if nothing passes. `table` selects the Cobra table ('main' or 'alt').
+
+    `instrument` is the instrument TYPE ('crypto'/'stocks'); the price data
+    comes from `ticker` (+ data_dir / file_path). `mode` must match the mode
+    the study was optimised with. `components` defaults to the components
+    recorded on each trial (user attr), else all registered components.
+    `in_sample_end` must match the study's: the test only uses bars up to it."""
+    check_table(table)
+    optuna_testing.check_mode(mode)
+    optuna_testing.check_instrument_type(instrument)
+    dataframe = data_import.data_importer(ticker, data_dir=data_dir, file_path=file_path)
     dataframe.import_csv_file()
     price = dataframe.df
 
     # benchmark is identical for every candidate -> compute it once
     benchmark_metrics = buyhold_data.buyhold_benchmark(
-        price.loc['2018-01-01':], deposit, instrument, safe_investment)
+        price.loc[start:in_sample_end], deposit, instrument, safe_investment)
     benchmark_returns = benchmark_metrics['return']
 
     backtest_cache = {}   # avoids re-running duplicate parameter sets
@@ -427,12 +504,21 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
         print(f"Evaluating Front {layer_idx} containing {len(front)} candidates...")
         
         for i, trial in enumerate(front):
-            base_params = tpi.params_from_trial(trial)
+            if not optuna_testing.is_feasible(trial):
+                # filtered-out trials ([-1000, 0]) are never robustness candidates
+                print(f"  Candidate {i+1}: SKIPPED (infeasible trial #{trial.number})")
+                continue
+            trial_components = tpi.resolve_components(
+                components if components is not None
+                else trial.user_attrs.get('components'))
+            base_params = tpi.params_from_trial(trial, trial_components)
 
             colors_ok, overall_cov, report, final_params = \
                 candidate_robustness_with_improvement(
                     price, deposit, instrument, safe_investment, mode,
-                    benchmark_returns, base_params, backtest_cache, verbose)
+                    benchmark_returns, base_params, backtest_cache, verbose,
+                    table=table, components=trial_components, start=start,
+                    end=in_sample_end)
 
             if overall_cov is None:
                 print(f"  Candidate {i+1}: DISQUALIFIED ({report})")
@@ -458,6 +544,7 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
                 passing_candidates.append({
                     'front': layer_idx,
                     'candidate_idx': i + 1,
+                    'components': trial_components,
                     'trial': trial,
                     'params': final_params,
                     'original_params': base_params,
@@ -478,10 +565,77 @@ def parameter_robustness_test(deposit: int, instrument, pareto_fronts,
     return passing_candidates
 
 
+def holdout_report(deposit: int, instrument, params: dict, in_sample_end: str,
+                   safe_investment: float = 0.0, mode: str = 'long_short',
+                   table: str = 'main', components=None, *, ticker: str,
+                   data_dir: str = None, file_path: str = None, end: str = None,
+                   verbose: bool = True):
+    """Table metrics and Cobra colours on the HELD-BACK period, i.e. the bars
+    after `in_sample_end` (up to `end`, default: last bar).
+
+    Indicators are computed on the full history up to `end` (the in-sample
+    bars are the warm-up); nothing after `end` is used. Like every window in
+    run_backtest, the hold-out starts flat on its first bar. Note: the trade
+    count bands are meant for multi-year histories, so on a short hold-out
+    the num_trades colour is mostly informative.
+    Returns a dict (metrics None if the strategy was liquidated)."""
+    check_table(table)
+    optuna_testing.check_mode(mode)
+    optuna_testing.check_instrument_type(instrument)
+    components = tpi.resolve_components(components)
+    dataframe = data_import.data_importer(ticker, data_dir=data_dir, file_path=file_path)
+    dataframe.import_csv_file()
+    price = dataframe.df
+
+    in_sample = price.loc[:in_sample_end]
+    after = price.index[price.index > in_sample.index[-1]] if len(in_sample) else price.index
+    if end is not None:
+        after = after[after <= price.loc[:end].index[-1]]
+    if len(after) == 0:
+        raise ValueError(f"No bars after in_sample_end={in_sample_end} for {ticker}")
+    holdout_start, holdout_end = after[0], after[-1]
+
+    benchmark = buyhold_data.buyhold_benchmark(
+        price.loc[holdout_start:holdout_end], deposit, instrument, safe_investment)
+    metrics = run_backtest(price, deposit, instrument, safe_investment, mode,
+                           benchmark['return'], params, components=components,
+                           start=holdout_start, end=holdout_end)
+    report = {'ticker': ticker, 'mode': mode, 'table': table,
+              'components': components, 'params': dict(params),
+              'holdout_start': holdout_start, 'holdout_end': holdout_end,
+              'bars': len(after), 'benchmark': benchmark, 'metrics': metrics,
+              'colors': None, 'greens': None, 'reds': None, 'passed': False}
+    if metrics is not None:
+        ok, greens, reds, colors = column_verdict(metrics, table)
+        report.update(colors=colors, greens=greens, reds=reds, passed=ok)
+    if verbose:
+        print(f"Hold-out {ticker} {holdout_start.date()} -> {holdout_end.date()} "
+              f"({len(after)} bars, {mode}, table={table}):")
+        if metrics is None:
+            print("  LIQUIDATED")
+        else:
+            for m in TABLE_METRICS:
+                print(f"  {m:15s} {metrics[m]:10.4f}  {report['colors'][m]}")
+            print(f"  calmar {metrics['calmar']:.4f}, alpha vs B&H {metrics['alpha']:.2f} pp "
+                  f"(B&H return {benchmark['return']:.2f}%) -> "
+                  f"{report['greens']} green / {report['reds']} red, "
+                  f"{'PASS' if report['passed'] else 'FAIL'}")
+    return report
+
+
 if __name__ == "__main__":
-    pareto = eval(12000, 'crypto', 0)
+    # Ustawienia uruchomienia (CSV: <repo>/dane_cenowe/<TICKER>.csv lub $TPI_DATA_DIR)
+    TICKER = 'BTC-USD'
+    INSTRUMENT_TYPE = 'crypto'     # 'crypto' (365) albo 'stocks' (252)
+    DEPOSIT = 12000
+    RISK_FREE = 0
+    MODE = 'long_short'
+    TABLE = 'main'
+
+    pareto = eval(DEPOSIT, INSTRUMENT_TYPE, RISK_FREE, ticker=TICKER, mode=MODE, table=TABLE)
     pareto = dedupe_fronts(pareto)
-    robust_candidates = parameter_robustness_test(12000, 'crypto', pareto, 0)
+    robust_candidates = parameter_robustness_test(DEPOSIT, INSTRUMENT_TYPE, pareto, RISK_FREE,
+                                                  mode=MODE, table=TABLE, ticker=TICKER)
     for c in robust_candidates:
         print(f"Front {c['front']} candidate {c['candidate_idx']}: "
               f"CoV={c['overall_cov']:.2%} ({c['cov_class']}), "
