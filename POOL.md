@@ -95,10 +95,15 @@ Sets of 5-7 are ranked with `set_coherence.rank_pool`; see the module docstring.
 Since `2d13278` every POOL-READY member has a primary speed knob in `set_coherence.KNOB`, so runs no longer pass ad-hoc knobs. A pool member without a knob raises an error and is never dropped silently.
 
 - **Regime gate (`regime_gate`):** horizon-matched on the fast/slow EMA pair (`regime_fast`, `regime_slow`), as a 2-D native scan like MACD. The gate is held at textbook: Hurst window 100, Hurst threshold 0.50, ADF p 0.05. BTC matches are 8/32 → 60 trades, 7/26 → 71 and 6/26 → 81. The gate parameters are a strong secondary horizon lever, because a closed gate freezes the position. **Tuning the gate parameters moves the member off its matched horizon.**
-- **Known limits (both members still compete, flagged NOT horizon-matched where they miss):**
-  - Ichimoku: the base knob (`ichimoku_base`, with `span_b` fixed at 52) only reaches about 52-66 trades on BTC, so the 80 target isn't matched (49 → 66).
-  - Ehlers ITrend: it can't match 70 or 80 on the 0.005 alpha grid, because the count jumps from 52 to 98 trades (0.01 → 52, 0.015 → 98).
-- **Decision (TA Quant Engineer, 1 Oct):** keep the Ichimoku base knob for T3, for consistency with T2. The `ichimoku_span_b` alternative is logged and not adopted. It reaches all three targets (48 → 62, 42 → 66, 33 → 78) but clusters with `ema_cross` at a median agreement of 0.917, and the top eligible set is unchanged. Evidence: `/workspace/ta/runs/reviewer/framework/review_2d13278.md`, `rank21_ichimoku_spanb/`.
+- **Ichimoku (`ichimoku`): knob changed to `ichimoku_span_b` (decision by the TA Quant Engineer, 1 Oct 2026).** The other params are held at textbook: base 26, conversion 9, displacement 26. The valid span_b range is 27-160 (conversion < base < span_b), which gives 88 → 20 trades on BTC.
+  - Matches: 48 → 62 trades at target 60, 42 → 66 at 70, and 33 → 78 at 80. All three are horizon-matched within the matcher tolerance (±10).
+  - Reached exactly (T ± 1, lagged counter): 60 (span_b 50 → 60) and 70 (39 → 70). 80 is not reached ±1, because the count jumps from 82 (span_b 32) to 78 (33).
+  - Reason: the old base knob (span_b fixed at 52) only reaches 52-66 trades, so Ichimoku was NOT horizon-matched at 80. An unmatched member's agreement numbers aren't comparable.
+  - With span_b, Ichimoku clusters with `ema_cross` at a median agreement of 0.917, so at most one of the two can be in a set.
+  - **This changes the T3 pick versus the base knob.** With the base knob, the T3 pick (≥3 new vs Set 1, T1 and T2) was ema_cross+parabolic_sar+linreg+keltner+donchian+ichimoku+bollinger (median rank 84). With span_b it is ema_cross+parabolic_sar+supertrend+linreg+hull+keltner+bollinger (median rank 107, C@70/20 0.8135).
+  - Correction: the earlier note that "the top eligible set is unchanged" held only with T2 eligibility (Set 1 + T1). This change supersedes the 1 Oct note "keep the Ichimoku base knob for T3".
+  - Evidence: `/workspace/ta/runs/reviewer/framework/recheck_pool_count.md`, `rank21_ichimoku_spanb/`, `/workspace/ta/runs/proto_coherence/BTC-USD/v2/t3_preview_spanb/`.
+- **Known limit (the member still competes, flagged NOT horizon-matched where it misses):** Ehlers ITrend can't match 70 or 80 on the 0.005 alpha grid, because the count jumps from 52 to 98 trades (0.01 → 52, 0.015 → 98).
 
 ## Note on earlier solo results
 
