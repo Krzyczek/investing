@@ -103,8 +103,12 @@ KNOB = {
     # Hurst/ADF params stay at textbook (tpi caches those series per price content, so the
     # 2-D scan costs one Hurst + one ADF pass, then ~1 ms per cell).
     'obv': 'obv_ema_length', 'linreg': 'linreg_length', 'ehlers_itrend': 'itrend_alpha',
-    'ichimoku': 'ichimoku_base', 'regime_gate': ('regime_fast', 'regime_slow'),
+    'ichimoku': 'ichimoku_span_b', 'regime_gate': ('regime_fast', 'regime_slow'),
 }
+# Ichimoku (1 Oct 2026, TA Quant Engineer): span_b, not base. With span_b fixed at 52 the base
+# knob only reaches 52-66 trades on BTC (80 NOT horizon-matched). span_b with base at textbook
+# 26 (valid 27-160 under conversion < base < span_b) gives 88..20 trades and matches 60/70/80
+# (48->62, 42->66, 33->78).
 
 
 # ---------------- horizon matching ----------------

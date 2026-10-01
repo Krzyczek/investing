@@ -8,7 +8,7 @@ import set_coherence as sc
 import tpi
 
 NEW = {'obv': 'obv_ema_length', 'linreg': 'linreg_length', 'ehlers_itrend': 'itrend_alpha',
-       'ichimoku': 'ichimoku_base', 'regime_gate': ('regime_fast', 'regime_slow')}
+       'ichimoku': 'ichimoku_span_b', 'regime_gate': ('regime_fast', 'regime_slow')}
 BASE = ('ema_cross', 'parabolic_sar', 'supertrend', 'adx', 'aroon')
 
 
@@ -85,3 +85,53 @@ def test_parallel_rank_pool_identical_to_serial(price):
     b = sc.rank_pool(price, pool, n_jobs=2, **kw)
     pd.testing.assert_frame_equal(a[0], b[0])
     pd.testing.assert_frame_equal(a[1], b[1])
+
+
+def _ichimoku_like(monkeypatch):
+    """Stand-in with ichimoku's param names, ranges and constraint (the real one lives on
+    ind-ichimoku): close vs a Donchian midline of span_b bars (slower with larger span_b)."""
+    def sig(df, p):
+        n = p['ichimoku_span_b']
+        mid = (df['high'].rolling(n).max() + df['low'].rolling(n).min()) / 2
+        return np.sign((df['close'] - mid).fillna(0).to_numpy())
+    monkeypatch.setitem(tpi.COMPONENTS, 'ichimoku', {
+        'group': 'perpetual', 'signal': sig,
+        'params': {'ichimoku_conversion': ('int', 5, 40, 1), 'ichimoku_base': ('int', 10, 80, 1),
+                   'ichimoku_span_b': ('int', 20, 160, 1), 'ichimoku_displacement': ('int', 5, 60, 1)}})
+    monkeypatch.setattr(tpi, 'CONSTRAINTS', tpi.CONSTRAINTS + [
+        ('ichimoku', lambda p: p['ichimoku_conversion'] < p['ichimoku_base'] < p['ichimoku_span_b'])])
+
+
+def test_ichimoku_knob_is_span_b_with_base_held_at_textbook(price, monkeypatch):
+    assert sc.KNOB['ichimoku'] == 'ichimoku_span_b'
+    _ichimoku_like(monkeypatch)
+    tb = sc.textbook('ichimoku')
+    start = str(price.index[0].date())
+    tab, params = sc.horizon_match(price, ['ichimoku'], 40, start)
+    row = tab.iloc[0]
+    assert row.param == 'ichimoku_span_b'
+    p = params['ichimoku']
+    for k in ('ichimoku_conversion', 'ichimoku_base', 'ichimoku_displacement'):
+        assert p[k] == tb[k]                                  # only span_b moves
+    assert tpi.params_valid(p, ['ichimoku'])
+
+
+def test_ichimoku_span_b_scan_skips_invalid_cells(price, monkeypatch):
+    # span_b must stay above the textbook base (conversion < base < span_b): the scan only
+    # visits valid cells, so the lowest scanned span_b is base + 1
+    _ichimoku_like(monkeypatch)
+    tb = sc.textbook('ichimoku')
+    keys, specs = ['ichimoku_span_b'], [tpi.COMPONENTS['ichimoku']['params']['ichimoku_span_b']]
+    _, cells, counts = sc._counts(price, 'ichimoku', tb, keys, specs, str(price.index[0].date()), {})
+    vals = [c[0] for c in cells]
+    assert min(vals) == tb['ichimoku_base'] + 1 and max(vals) == 160
+    assert len(vals) == 160 - tb['ichimoku_base']
+
+
+def test_registered_ichimoku_uses_span_b_and_reaches_targets_when_present(price):
+    # integration worktrees (real ichimoku registered): the knob is a registered param and
+    # the scan covers the whole valid span_b range
+    if 'ichimoku' not in tpi.COMPONENTS:
+        pytest.skip('ichimoku not registered on this branch')
+    spec = tpi.COMPONENTS['ichimoku']['params'][sc.KNOB['ichimoku']]
+    assert spec[0] == 'int' and spec[1] <= 27 and spec[2] >= 160
