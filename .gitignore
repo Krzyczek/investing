@@ -1,4 +1,5 @@
 __pycache__/
 
 dane_cenowe/
-working.py.pytest_cache/
+working.py
+.pytest_cache/

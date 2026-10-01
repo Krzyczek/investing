@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 from decimal import Decimal
 import indicators
 
@@ -91,7 +92,12 @@ COMPONENTS = {
         'signal': _parabolic_sar_signal,
         'params': {
             'parabolic_sar_start':        ('float', 0.0, 1.0, 0.01),
-            'parabolic_sar_acceleration': ('float', 0.01, 0.1, 0.01),
+            # tuning search space changed 30 Sep 2026 (Krzyczek): was 0.01-0.1 step 0.01.
+            # Minimal range in which every target T of the horizon grid 60/70/80 is
+            # reached, i.e. some value gives T +-1 trades (run_backtest count, BTC-USD
+            # in-sample 2018-01-01..2025-03-31, start 0.02 / maximum 0.2 at textbook):
+            # 0.0004 -> 61, 0.001 -> 71, 0.0013 -> 81 (the only value at 79-81); 0.01 -> 156
+            'parabolic_sar_acceleration': ('float', 0.0004, 0.1, 0.0001),
             'parabolic_sar_maximum':      ('float', 0.1, 1.0, 0.1),
         },
     },
@@ -158,7 +164,12 @@ def params_from_trial(trial, components=None) -> dict:
         if name in trial.params:
             out[name] = trial.params[name]
         elif f'{name}_scaled' in trial.params:
-            out[name] = round(trial.params[f'{name}_scaled'] * step, 10)
+            # inverse of suggest_params: the scaled int is value * scale (scale = 10**decimals
+            # of step), NOT value / step - the two only agree when step == 1/scale
+            # (e.g. 0.01, 0.1); for step 0.0005 value*step was 5x too large.
+            exp = Decimal(str(step)).as_tuple().exponent
+            scale = 10 ** (-exp) if exp < 0 else 1
+            out[name] = round(trial.params[f'{name}_scaled'] / scale, 10)
         else:
             raise KeyError(
                 f"trial {getattr(trial, 'number', '?')} has neither "
@@ -216,6 +227,28 @@ def params_valid(params: dict, components=None) -> bool:
     return all(rule(params) for comp, rule in CONSTRAINTS if comp in selected)
 
 
+# Wynik TPI == 0 -> utrzymaj poprzednią pozycję (decyzja Krzyczka).
+ZERO_ATOL = 1e-12   # group averaging can leave float residue like 1e-17
+
+
+def position_from_score(score, mode: str = 'long_short') -> np.ndarray:
+    """TPI score -> position (signal at the close of each bar, before the
+    one-bar lag applied in the backtest).
+
+    score > 0 -> long (+1); score < 0 -> short (-1) in long_short, flat (0)
+    in long_only; score == 0 -> HOLD the previous position (no flip, no
+    exit). Same hold rule in both modes. If the first bars score 0 there is
+    no previous position, so it stays flat until the first non-zero score.
+    Uses only past bars (forward fill), so there is no lookahead."""
+    if mode not in ('long_only', 'long_short'):
+        raise ValueError(f"mode must be 'long_only' or 'long_short', got {mode!r}")
+    score = np.asarray(score, dtype=float)
+    zero = np.isnan(score) | np.isclose(score, 0.0, rtol=0.0, atol=ZERO_ATOL)
+    below = -1.0 if mode == 'long_short' else 0.0
+    raw = np.where(zero, np.nan, np.where(score > 0, 1.0, below))
+    return pd.Series(raw).ffill().fillna(0.0).to_numpy().astype(int)
+
+
 class tpi():
     def __init__(self, df):
         self.df = df
@@ -242,7 +275,6 @@ class tpi():
         score = np.mean(np.vstack(group_means), axis=0)
         self.tpi_score = score
 
-        if mode == 'long_short':
-            self.signal = np.where(score >= 0, 1, -1)
-        else:
-            self.signal = np.where(score > 0, 1, 0)
+        # Wynik 0 = trzymaj poprzednią pozycję (przedtem: long_short 0 -> long,
+        # long_only 0 -> flat); patrz position_from_score
+        self.signal = position_from_score(score, mode)
