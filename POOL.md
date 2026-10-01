@@ -90,6 +90,16 @@ Sets of 5-7 are ranked with `set_coherence.rank_pool`; see the module docstring.
 4. Trades are counted as run_backtest counts them (one-bar lag).
 5. MACD is matched natively on (fast, slow).
 
+## Horizon-matching knobs (set_coherence `KNOB`, 1 Oct 2026)
+
+Since `2d13278` every POOL-READY member has a primary speed knob in `set_coherence.KNOB`, so runs no longer pass ad-hoc knobs. A pool member without a knob raises an error and is never dropped silently.
+
+- **Regime gate (`regime_gate`):** horizon-matched on the fast/slow EMA pair (`regime_fast`, `regime_slow`), as a 2-D native scan like MACD. The gate is held at textbook: Hurst window 100, Hurst threshold 0.50, ADF p 0.05. BTC matches are 8/32 → 60 trades, 7/26 → 71 and 6/26 → 81. The gate parameters are a strong secondary horizon lever, because a closed gate freezes the position. **Tuning the gate parameters moves the member off its matched horizon.**
+- **Known limits (both members still compete, flagged NOT horizon-matched where they miss):**
+  - Ichimoku: the base knob (`ichimoku_base`, with `span_b` fixed at 52) only reaches about 52-66 trades on BTC, so the 80 target isn't matched (49 → 66).
+  - Ehlers ITrend: it can't match 70 or 80 on the 0.005 alpha grid, because the count jumps from 52 to 98 trades (0.01 → 52, 0.015 → 98).
+- **Decision (TA Quant Engineer, 1 Oct):** keep the Ichimoku base knob for T3, for consistency with T2. The `ichimoku_span_b` alternative is logged and not adopted. It reaches all three targets (48 → 62, 42 → 66, 33 → 78) but clusters with `ema_cross` at a median agreement of 0.917, and the top eligible set is unchanged. Evidence: `/workspace/ta/runs/reviewer/framework/review_2d13278.md`, `rank21_ichimoku_spanb/`.
+
 ## Note on earlier solo results
 
 Solo Optuna/robustness runs were made before the method changed (`ema_cross`, `supertrend`, `donchian`, `keltner`, `vortex`, all BTC-USD, 0 feasible trials). They are **information only, pre-method-change**. They don't count for or against pool entry, and they aren't used to pick sets. Their logs are still in `/workspace/ta/work/runs/`, `/workspace/ta/runs/builder-a/` and `/workspace/ta/runs/builder-b/vortex/`.
