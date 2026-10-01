@@ -98,6 +98,12 @@ KNOB = {
     'roc': 'roc_length', 'hull': 'hull_length', 'tema': 'tema_length',
     'vortex': 'vortex_length', 'bollinger': 'bollinger_mult', 'macd': ('macd_fast', 'macd_slow'),
     'cci': 'cci_length', 'kama': 'kama_fast',
+    # 1 Oct 2026: the remaining POOL-READY members (previously passed ad hoc as `knobs`
+    # in the T1/T2 runs). regime_gate is matched natively on its EMA pair like MACD; its
+    # Hurst/ADF params stay at textbook (tpi caches those series per price content, so the
+    # 2-D scan costs one Hurst + one ADF pass, then ~1 ms per cell).
+    'obv': 'obv_ema_length', 'linreg': 'linreg_length', 'ehlers_itrend': 'itrend_alpha',
+    'ichimoku': 'ichimoku_base', 'regime_gate': ('regime_fast', 'regime_slow'),
 }
 
 
@@ -209,6 +215,10 @@ def horizon_match(price, comps, target, start='2018-01-01', tol=PLATEAU_TOL, kno
     space_override = space_override or {}
     cache = {} if cache is None else cache
     rows, params = [], {}
+    no_knob = [c for c in comps if c not in knobs]
+    if no_knob:
+        raise ValueError(f'no speed knob for {no_knob}: add them to KNOB (or pass knobs=...); '
+                         f'a pool member must never be dropped silently')
     for c in comps:
         tb = textbook(c, base)
         key = knobs[c]
@@ -405,14 +415,57 @@ def set_coherence(P, members, holds=HOLDS, weights=WEIGHTS, precision_veto=PRECI
     return out
 
 
-def score_all(P, sizes=(5, 6, 7), holds=HOLDS, **kw):
+def _score_combos(P, k, lo, hi, holds, kw):
     rows = []
-    for k in sizes:
-        for combo in itertools.combinations(range(len(P.names)), k):
-            key = '+'.join(P.names[i] for i in combo)
-            for h, o in set_coherence(P, combo, holds=holds, **kw).items():
-                rows.append(dict(members=key, k=k, target=P.target, hold=h, **o))
-    return pd.DataFrame(rows)
+    for combo in itertools.islice(itertools.combinations(range(len(P.names)), k), lo, hi):
+        key = '+'.join(P.names[i] for i in combo)
+        for h, o in set_coherence(P, combo, holds=holds, **kw).items():
+            rows.append(dict(members=key, k=k, target=P.target, hold=h, **o))
+    return rows
+
+
+_WORK = None        # (pools, holds, kw) inherited by forked score workers
+
+
+def _score_task(task):
+    pi, k, lo, hi = task
+    pools, holds, kw = _WORK
+    return _score_combos(pools[pi], k, lo, hi, holds, kw)
+
+
+def _score_pools(pools, sizes, holds, n_jobs=1, chunk=2000, **kw):
+    """Rows of every (pool, k, combo, hold), in exactly the serial order. n_jobs > 1
+    scores contiguous chunks of combinations in forked worker processes and
+    concatenates them in task order, so the result is identical to n_jobs=1
+    (the scoring is CPU-bound pure Python; this is the slow part of rank_pool)."""
+    import math
+    import multiprocessing as mp
+    tasks = [(pi, k, lo, min(lo + chunk, math.comb(len(P.names), k)))
+             for pi, P in enumerate(pools) for k in sizes
+             for lo in range(0, math.comb(len(P.names), k), chunk)]
+    if n_jobs is None or n_jobs < 1:
+        import os
+        n_jobs = os.cpu_count() or 1
+    if n_jobs == 1 or len(tasks) <= 1 or 'fork' not in mp.get_all_start_methods():
+        parts = [_score_combos(pools[pi], k, lo, hi, holds, kw) for pi, k, lo, hi in tasks]
+    else:
+        global _WORK
+        _WORK = (pools, holds, kw)
+        try:
+            with mp.get_context('fork').Pool(min(n_jobs, len(tasks))) as ex:
+                parts = ex.map(_score_task, tasks, chunksize=1)      # map keeps task order
+        finally:
+            _WORK = None
+    per_pool = [[] for _ in pools]
+    for (pi, *_), part in zip(tasks, parts):
+        per_pool[pi].extend(part)
+    return [pd.DataFrame(r) for r in per_pool]
+
+
+def score_all(P, sizes=(5, 6, 7), holds=HOLDS, n_jobs=1, **kw):
+    """Score every set of the given sizes in one per-target pool (n_jobs: worker
+    processes, 1 = serial, None/0 = all CPUs; the result does not depend on it)."""
+    return _score_pools([P], sizes, holds, n_jobs=n_jobs, **kw)[0]
 
 
 def rank_configs(scores):
@@ -459,9 +512,13 @@ def aggregate(ranked, ref=REF, earlier_sets=(SET1_BASELINE,)):
 
 
 def rank_pool(price, pool, targets=TARGETS, holds=HOLDS, sizes=(5, 6, 7), start='2018-01-01',
-              space_override=None, knobs=None, cluster_threshold=CLUSTER_THRESHOLD, **kw):
+              space_override=None, knobs=None, cluster_threshold=CLUSTER_THRESHOLD, n_jobs=1, **kw):
     """Horizon-match per target, apply the pool-wide (median) clusters,
     score every set in every config, rank and aggregate.
+    n_jobs: scoring worker processes (1 = serial, None/0 = all CPUs); results are
+    identical for any n_jobs. BTC in-sample, 21 members (190,893 sets x 9 configs):
+    5.4 min wall on 8 CPUs (1 Oct 2026); serial about 33 min (T2's 20-member serial
+    run took 23 min, of which horizon matching was about 16 s).
     Returns (agg, ranked scores, horizon tables, params per target, pools)."""
     tables, params, pools, cache = [], {}, [], {}
     for t in targets:
@@ -470,6 +527,6 @@ def rank_pool(price, pool, targets=TARGETS, holds=HOLDS, sizes=(5, 6, 7), start=
         tables.append(tab)
         pools.append(Pool.from_price(price, params[t], pool, t, start, holds=holds))
     apply_pool_clusters(pools, cluster_threshold)
-    scores = [score_all(P, sizes, holds=holds, **kw) for P in pools]
+    scores = _score_pools(pools, sizes, holds, n_jobs=n_jobs, **kw)
     ranked = rank_configs(pd.concat(scores, ignore_index=True))
     return aggregate(ranked), ranked, pd.concat(tables, ignore_index=True), params, pools
