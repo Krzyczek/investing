@@ -26,11 +26,11 @@ A TPI score of exactly 0 = **hold the previous position** (no flip, no exit), in
 
 | indicator | key | owner/branch | built | reference check | review | log paths |
 |---|---|---|---|---|---|---|
-| SMA + EMA (EMA cross) | `ema_cross` (uses `indicators.sma`, `indicators.ema`) | main (original) | yes | not done | not done | - |
-| ADX (directional: +DI vs -DI above threshold) | `adx` | main (directional since PR #1) | yes | not done | not done | - |
-| Aroon oscillator | `aroon` | main (original) | yes | not done | not done | - |
-| Parabolic SAR | `parabolic_sar` | main (original); **tuning search space changed 30 Sep** (see below) | yes | not done | range POOL-READY at `0ef1708` | - |
-| Supertrend | `supertrend` | main (original) | yes | not done | not done | - |
+| EMA cross | `ema_cross` (uses `indicators.ema` only; key text corrected 4 Oct) | main (original) | yes | done 4 Oct: TA-Lib EMA and an explicit loop, 38 files; identical beyond warm-up (seed: first close vs SMA) | POOL-READY (at `959ef5e`; member code identical since Set 1 `5b8011c`) | `/workspace/ta/runs/reviewer/base5/` |
+| ADX (directional: +DI vs -DI above threshold) | `adx` | main (directional since PR #1) | yes | done 4 Oct: TA-Lib and `ta`, 38 files; identical beyond warm-up (Wilder seed: TR from bar 0, DX filled with 0) | POOL-READY (at `959ef5e`; about a third of the (period, threshold) cells keep a 0 vote across the window; data-dependent, documented) | `/workspace/ta/runs/reviewer/base5/` |
+| Aroon oscillator | `aroon` | main (original) | yes | done 4 Oct: TA-Lib AROONOSC, 38 files; exact (ties: most recent bar) | POOL-READY (at `959ef5e`) | `/workspace/ta/runs/reviewer/base5/` |
+| Parabolic SAR | `parabolic_sar` | main (original); **tuning search space changed 30 Sep** (see below) | yes | done 4 Oct: Pine `ta.sar` loop, 38 files; identical beyond warm-up for start below 0.9 (start 0.9-1.0 with max 1.0 flips every bar, an unused corner); TA-Lib SAREXT differs by definition (clamp order) | POOL-READY (indicator code at `959ef5e`; range reviewed at `0ef1708`) | `/workspace/ta/runs/reviewer/base5/` |
+| Supertrend | `supertrend` | main (original) | yes | done 4 Oct: Pine `ta.supertrend` loop, 38 files; exact (Wilder ATR, ratcheting bands) | POOL-READY (at `959ef5e`) | `/workspace/ta/runs/reviewer/base5/` |
 
 Helpers in `indicators.py` with **no signal and not a component** (reuse them, don't rebuild):
 
@@ -64,6 +64,11 @@ Review status as of 30 Sep 2026, 13:09 BST, from the TA Validation Reviewer (`/w
 | Ichimoku | - | B / `ind-ichimoku` | `7fbea9c` | `969c672` (docs; rebased onto Donchian `5b3ced7`; `0841b35` dropped) | POOL-READY (`5b3ced7` is an ancestor, so merging `7fbea9c` brings the reviewed Donchian) | `/workspace/ta/runs/builder-b/` |
 
 Parabolic SAR's widened range (on this branch at `0ef1708`) is also POOL-READY.
+
+## Review notes, 4 Oct 2026 (TA Validation Reviewer)
+
+- Base members (`ema_cross`, `adx`, `aroon`, `parabolic_sar`, `supertrend`) reviewed with pool-gate checks (1)-(4) at `959ef5e`, the framework code of integration-t3 `fcddb1e` used by T3 and T4. Member code is identical at Set 1 `5b8011c`, T1 `3f07c8a`, T2 `e921090`, T3 `fcddb1e` and T4 `8acba3c`; the only change is the Parabolic SAR acceleration range (see the 30 Sep section; T1 used 0.0005-0.1 step 0.0005). Truncation test clean, one-bar lag applied a single time. The only overlap above 0.9 is `ema_cross` with Ichimoku (0.917, known cluster). Evidence: `/workspace/ta/runs/reviewer/base5/base5_review_20261004.md`.
+- T1 Bollinger SHA: T1 ran `bollinger` from `5f928bc`; the POOL-READY SHA is `6534ea8`. The code diff between them, outside docs and tests, is `e15c4c8` alone (`tpi.py`: the constraint `bollinger_mult < (length-1)/sqrt(length)` and its helper). Signals are byte-identical at all 2453 cells allowed at `6534ea8` on all 38 files. The 43 extra cells (length 5-10, high mult) vote 0 on every bar of all 38 files. T1 sampled 9 of them (BTC 5, ETH 2, SOL 2), all infeasible; the T1 matched params (length 20, mult 1.5-1.8) and the T1 pick (20/1.7) lie in the allowed grid. T1 Bollinger results stand. Evidence: `/workspace/ta/runs/reviewer/bollinger/t1_sha_check.md`.
 
 ## Tuning search space changed 30 Sep (Krzyczek)
 
